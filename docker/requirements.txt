@@ -1,0 +1,17 @@
+# FastAPI and Web Framework
+fastapi==0.129.0
+uvicorn[standard]==0.41.0
+pydantic==2.12.5
+pydantic-settings==2.13.0
+
+# Database
+sqlalchemy==2.0.46
+alembic==1.18.4
+psycopg2-binary==2.9.11
+
+# HTTP Client
+httpx==0.28.1
+
+# Transitive dependencies (security pinning)
+idna>=3.11
+certifi>=2026.1.4

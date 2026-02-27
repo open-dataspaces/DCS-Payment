@@ -1,0 +1,47 @@
+# Development Dockerfile with hot-reload support
+ARG PYTHON_VERSION=3.13
+
+FROM python:${PYTHON_VERSION}-slim
+
+# Set environment variables
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_NO_CACHE_DIR=1
+
+WORKDIR /app
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    gcc \
+    postgresql-client \
+    curl \
+    vim \
+    git \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy requirements
+COPY docker/requirements.txt docker/requirements-dev.txt ./
+
+# Install Python dependencies
+RUN pip install --upgrade pip && \
+    pip install -r requirements.txt && \
+    pip install -r requirements-dev.txt
+
+# Copy application code
+COPY app/ /app/app/
+COPY cronjob/ /app/cronjob/
+COPY migrations/ /app/migrations/
+COPY scripts/ /app/scripts/
+COPY test/ /app/test/
+
+# Create non-root user
+RUN useradd -m -u 1000 appuser && \
+    chown -R appuser:appuser /app
+
+USER appuser
+
+# Expose port
+EXPOSE 8000
+
+# Run with hot-reload
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
