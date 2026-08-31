@@ -4,7 +4,7 @@
 
 ### 1.1 目的・背景
 
-本ソフトウェアは、ウラノス・エコシステム・データスペーシズのデータスペースコンプリメンタリサービス（Dataspace Complementary Services：DCS）の一つとして、データ連携における精算決済機能を担うソフトウェアである。データ提供者・消費者間の取引を記録し、外部決済サービスと連携した利用量と料金モデルに基づく精算決済をサポートする。
+本ソフトウェアは、Open Data Spaces(ODS)のデータスペースコンプリメンタリサービス（Dataspace Complementary Services：DCS）の一つとして、データ連携における精算決済機能を担うソフトウェアである。データ提供者・消費者間の取引を記録し、外部決済サービスと連携した利用量と料金モデルに基づく精算決済をサポートする。
 
 ### 1.2 適用範囲 / 非対象
 
@@ -19,7 +19,7 @@
 ### 1.4 前提・制約
 
 * 認証機能は、アイデンティティレイヤ（L3）との連携を前提とするため、本システムの対象外
-* 通信は **TLS** 前提（Ingress で終端、Pod→DB も TLS）。
+* 通信は **TLS** 前提（外部のプロキシ／ロードバランサーで終端、API→DB間も TLS）。
 * TLS終端は、本ソフトウェアの外部で行うため対象外
 * 認可ポリシーは OpenFGAを使用し管理
 * 外部決済サービスとの連携は、検証のみとする。
@@ -33,25 +33,21 @@
 graph TB
     Users[エンドユーザー] --> EXT_API
     
-    subgraph AWS["AWS"]
-        ALB --> EKS_SVC[Kubernetes Service]
+    subgraph INFRA["実行環境"]
+        LB[ロードバランサー] --> API1[FastAPI サーバ 1]
+        LB --> API2[FastAPI サーバ 2]
         
-        subgraph EKS["Amazon EKS クラスター"]
-            EKS_SVC --> API1[FastAPI Pod 1]
-            EKS_SVC --> API2[FastAPI Pod 2]
-            
-            subgraph DEV1["対象1: 精算決済RESTAPI"]
-                API1
-                API2
-            end
+        subgraph DEV1["対象1: 精算決済RESTAPI"]
+            API1
+            API2
         end
-      subgraph DEV2["対象: 精算決済DB"]
-          RDS[(PostgreSQL RDS)]
-      end
+        subgraph DEV2["対象: 精算決済DB"]
+            DB[(PostgreSQL)]
+        end
     end
 
-    API1 -.-> RDS
-    API2 -.-> RDS
+    API1 -.-> DB
+    API2 -.-> DB
     
     subgraph EXTERNAL["L2,L3"]
         EXT_API[REST API]
@@ -59,24 +55,24 @@ graph TB
     
     API1 -.-> EXT_API
     API2 -.-> EXT_API
-    EXT_API --> ALB
+    EXT_API --> LB
     
     classDef devTarget fill:#ffe6e6,stroke:#ff4444,stroke-width:3px
-    classDef awsService fill:#e6f3ff,stroke:#0066cc,stroke-width:2px
+    classDef infraService fill:#e6f3ff,stroke:#0066cc,stroke-width:2px
     classDef database fill:#fff2e6,stroke:#ff8800,stroke-width:2px
     classDef external fill:#f0f0f0,stroke:#888888,stroke-width:1px
     
     class DEV1,DEV2 devTarget
-    class AWS,EKS,ALB,EKS_SVC awsService
-    class RDS database
+    class INFRA,LB infraService
+    class DB database
     class EXTERNAL,EXT_API external
 ```
 
 ### 2.2 主要コンポーネントと責務
 
 * 精算決済APIと精算決済DBが本ソフトウェアの対象
-* 精算決済APIは、EKS(Kubernetes)上のPodとして動作する。
-* 精算決済DBは、AWSのRDS(PostgreSQL)として動作し、精算決済情報を保持する
+* 精算決済APIは、コンテナとして動作し、冗長構成をとることができる。
+* 精算決済DBは、PostgreSQLとして動作し、精算決済情報を保持する
 * 認証は、L3 Identity ComponentのKeyCloakの認証機能を使用する。
 * 精算決済APIは、L2 Transactionを介して呼び出される。
 
@@ -159,7 +155,6 @@ end
 ### 3.2 購入処理シーケンス
 
 ```mermaid 
-
 ---
 title: 購入処理
 config:
@@ -228,9 +223,9 @@ end
 
 ### 3.3 購入確定処理シーケンス
 
-- Loggingからのログ出力タイミングに合わせて、購入確定処理を実行する。
+- L2ログは、精算決済側のログ格納場所に定期的に格納されていることを前提とする。
+- 精算決済は、指定時刻にログ格納場所からデータ交換ログを取得し、購入確定処理を実行する。
 ```mermaid 
-
 ---
 title: 購入確定処理
 config:
@@ -247,7 +242,7 @@ box データ消費者(購入者)環境
 end
 
 box データスペース環境
-  participant CORE_LOG as Loging
+  participant LOG as ログ格納場所(L2から取得済)
 end
 
 box データスペース環境
@@ -265,9 +260,9 @@ end
 
 opt 購入確定処理
   Note over COMP_PAYMENT: 指定時刻に実行
-  COMP_PAYMENT->>CORE_LOG: データ交換ログ取得
-  CORE_LOG-->>COMP_PAYMENT: -
-  COMP_PAYMENT-->>COMP_PAYMENT: 精算決算のTransaction毎にデータ交換ログを確認
+  COMP_PAYMENT->>LOG: データ交換ログ取得
+  LOG-->>COMP_PAYMENT: -
+  COMP_PAYMENT-->>COMP_PAYMENT: 精算決済のTransaction毎にデータ交換ログを確認
   COMP_PAYMENT-->>COMP_PAYMENT: Transactionのログステータス更新
 end
 
@@ -277,7 +272,6 @@ end
 
 - 消費者からのデータ交換ステータスが交換完了、提供者からのデータ交換ステータスが交換完了、データ交換ログのステータスが成功、となったTrasactionを請求予定額、支払い予定額の対象とする。
 ```mermaid 
-
 ---
 title: 決済処理
 config:
@@ -335,7 +329,6 @@ end
 
 - データ提供者が、指定したデータ消費者との取引情報について、期間・精算決済状態で絞り込み、取得する。
 ```mermaid
-
 ---
 title: 決済状態取得
 config:
@@ -402,7 +395,7 @@ end
 | GET    | `/api/v1/fee-model`             | 利用料モデル一覧取得 |
 | POST    | `/api/v1/fee-model`             | 利用料モデル登録 |
 | PUT    | `/api/v1/fee-model/{fee_model_id}`             | 利用料モデル変更 |
-| DEL    | `/api/v1/fee-model/{fee_model_id}`             | 利用料モデル削除 |
+| DELETE | `/api/v1/fee-model/{fee_model_id}`             | 利用料モデル削除 |
 | POST    | `/api/v1/data-exchange/transaction/eligibility`             | 取引可否確認 |
 | POST    | `/api/v1/data-exchange/non-fee-model/transaction/eligibility` | 取引可否確認（利用料モデルなし） |
 | POST    | `/api/v1/data-exchange/non-fee-model/confirm`               | データ交換取引金額確定（利用料モデルなし） |
@@ -449,7 +442,7 @@ end
 - L3 Identity Componentとの認証フローにより取得したアクセストークンを使用し、本ソフトウェアのAPIを実行する。
 - L3 Identity Componentとの認証フローは、利用ユーザの場合は、認可コードフローにより認証を行い取得したアクセストークンを利用する。
 - L3 Identity Componentとの認証フローは、ユーザシステムの場合(人を介在しない場合)は、クレデンシャルフローにより認証を行い取得したアクセストークンを利用する。
-- 各APIのAuthorizationヘッダに付与されたアクセストークンを元に、利用ユーザまたは、ユーザシステムを特定し、認可情報をチェック後、該当する通知情報を返却する。
+- 各APIのAuthorizationヘッダに付与されたアクセストークンを元に、利用ユーザまたは、ユーザシステムを特定し、認可情報をチェック後、該当するAPI処理を実行し、処理結果を返却する。
 - 認可機能は、精算決済機能とは別にOpenFGAを構築し、認可登録、認可チェックを行うことを前提とする。
 
 ### 5.2 認可機能
@@ -672,7 +665,8 @@ erDiagram
 
 | 版   | 日付         | 変更点                                                                                                       |
 | --- | ---------- | --------------------------------------------------------------------------------------------------------- |
-| 1.0 | 2025-08-29 | 初版 |
+| 1.0 | 2026-02-28 | 第1.0版 |
+| 1.1 | 2026-08-31 | 第1.1版 |
 
 ---
 

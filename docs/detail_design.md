@@ -6,7 +6,6 @@
 ### (1) 利用料モデル登録・更新・取得・削除シーケンス
 
 ```mermaid 
-
 ---
 title: 利用料モデル登録・更新・取得・削除シーケンス
 config:
@@ -25,12 +24,12 @@ end
 box データ流通システム:　コア機能
   participant CORE_L2 as データ流通(L2)
   participant CORE_L3 as 認証・認可(L3)
+  participant AUTHZ as 認可(OpenFGA)
 end
 
 box 精算決済
   participant PAYMENT as 精算決済API
   participant PAYMENT_DB1 as 精算決済DB
-  participant AUTHZ as 認可(OpenFGA)
 end
 
 box データ提供者環境
@@ -46,66 +45,76 @@ CORE_L3-->>P_SA: IDトークン+アクセストークン
 %% --- Create: 利用料モデル作成 ---
 opt 利用料モデル作成
   P->>P_SA: 利用料モデル作成
-  P_SA->>PAYMENT: POST /api/v1/fee-model<BR>(アクセストークン,利用料モデル名,利用料モデル情報)
+  P_SA->>CORE_L2: POST /api/v1/fee-model<BR>(アクセストークン,利用料モデル名,利用料モデル情報)
+  CORE_L2->>PAYMENT: POST /api/v1/fee-model<BR>(アクセストークン,利用料モデル名,利用料モデル情報)
   PAYMENT->>CORE_L3: アクセストークン検証
   CORE_L3-->>PAYMENT: OK
   PAYMENT->>AUTHZ: 認可確認
   AUTHZ-->>PAYMENT: 認可確認結果
   PAYMENT->>PAYMENT_DB1: 利用料モデル登録(INSERT)
   PAYMENT_DB1-->>PAYMENT: 作成結果
-  PAYMENT-->>P_SA: 201 Created<BR>(利用料モデルID,利用料モデル名,利用料モデル情報)
+  PAYMENT-->>CORE_L2: 201 Created<BR>(利用料モデルID,利用料モデル名,利用料モデル情報)
+  CORE_L2-->>P_SA: 201 Created<BR>(利用料モデルID,利用料モデル名,利用料モデル情報)
 end
 
 %% --- Update: 利用料モデル更新 ---
 opt 利用料モデル更新
   P->>P_SA: 利用料モデル更新
-  P_SA->>PAYMENT: PUT /api/v1/fee-model/{利用料モデルID}<BR>(アクセストークン,利用料モデル名,利用料モデル情報)
+  P_SA->>CORE_L2: PUT /api/v1/fee-model/{利用料モデルID}<BR>(アクセストークン,利用料モデル名,利用料モデル情報)
+  CORE_L2->>PAYMENT: PUT /api/v1/fee-model/{利用料モデルID}<BR>(アクセストークン,利用料モデル名,利用料モデル情報)
   PAYMENT->>CORE_L3: アクセストークン検証
   CORE_L3-->>PAYMENT: OK
   PAYMENT->>AUTHZ: 認可確認
   AUTHZ-->>PAYMENT: 認可確認結果
   PAYMENT->>PAYMENT_DB1: 利用料モデル更新(UPDATE)
   PAYMENT_DB1-->>PAYMENT: 更新結果
-  PAYMENT-->>P_SA: 200 OK<BR>(利用料モデルID,利用料モデル名,利用料モデル情報)
+  PAYMENT-->>CORE_L2: 200 OK<BR>(利用料モデルID,利用料モデル名,利用料モデル情報)
+  CORE_L2-->>P_SA: 200 OK<BR>(利用料モデルID,利用料モデル名,利用料モデル情報)
 end
 
 %% --- Retrieve: 利用料モデルの取得 ---
 opt 利用料モデル取得
   P->>P_SA: 利用料モデル取得
-  P_SA->>PAYMENT: GET /api/v1/fee-model/{利用料モデルID}<BR>(アクセストークン)
+  P_SA->>CORE_L2: GET /api/v1/fee-model/{利用料モデルID}<BR>(アクセストークン)
+  CORE_L2->>PAYMENT: GET /api/v1/fee-model/{利用料モデルID}<BR>(アクセストークン)
   PAYMENT->>CORE_L3: アクセストークン検証
   CORE_L3-->>PAYMENT: OK
   PAYMENT->>AUTHZ: 認可確認
   AUTHZ-->>PAYMENT: 認可確認結果
   PAYMENT->>PAYMENT_DB1: 指定したIDの利用料モデルを取得(SELECT)
   PAYMENT_DB1-->>PAYMENT: 指定した利用料モデル情報
-  PAYMENT-->>P_SA: 200 OK<BR>(利用料モデルID,利用料モデル名,利用料モデル情報)
+  PAYMENT-->>CORE_L2: 200 OK<BR>(利用料モデルID,利用料モデル名,利用料モデル情報)
+  CORE_L2-->>P_SA: 200 OK<BR>(利用料モデルID,利用料モデル名,利用料モデル情報)
 end
 
 %% --- Delete: 利用料モデルの削除 ---
 opt 利用料モデル削除
   P->>P_SA: 利用料モデル削除
-  P_SA->>PAYMENT: DELETE /api/v1/fee-model/{利用料モデルID}<BR>(アクセストークン)
+  P_SA->>CORE_L2: DELETE /api/v1/fee-model/{利用料モデルID}<BR>(アクセストークン)
+  CORE_L2->>PAYMENT: DELETE /api/v1/fee-model/{利用料モデルID}<BR>(アクセストークン)
   PAYMENT->>CORE_L3: アクセストークン検証
   CORE_L3-->>PAYMENT: OK
   PAYMENT->>AUTHZ: 認可確認
   AUTHZ-->>PAYMENT: 認可確認結果
   PAYMENT->>PAYMENT_DB1: 指定した利用料モデルを削除(DELETE)
   PAYMENT_DB1-->>PAYMENT: 削除結果
-  PAYMENT-->>P_SA: 204 No Content
+  PAYMENT-->>CORE_L2: 204 No Content
+  CORE_L2-->>P_SA: 204 No Content
 end
 
 %% --- Retrieve: 利用料モデルの一覧取得 ---
 opt 利用料モデル一覧取得
   P->>P_SA: 利用料モデル一覧取得
-  P_SA->>PAYMENT: GET /api/v1/fee-model<BR>(アクセストークン)
+  P_SA->>CORE_L2: GET /api/v1/fee-model<BR>(アクセストークン)
+  CORE_L2->>PAYMENT: GET /api/v1/fee-model<BR>(アクセストークン)
   PAYMENT->>CORE_L3: アクセストークン検証
   CORE_L3-->>PAYMENT: OK
   PAYMENT->>AUTHZ: 認可確認
   AUTHZ-->>PAYMENT: 認可確認結果
   PAYMENT->>PAYMENT_DB1: 利用料モデルを取得(SELECT)
   PAYMENT_DB1-->>PAYMENT: 利用料モデル一覧
-  PAYMENT-->>P_SA: 200 OK<BR>(利用料モデルID,利用料モデル名,利用料モデル情報)
+  PAYMENT-->>CORE_L2: 200 OK<BR>(利用料モデルID,利用料モデル名,利用料モデル情報)
+  CORE_L2-->>P_SA: 200 OK<BR>(利用料モデルID,利用料モデル名,利用料モデル情報)
 end
 
 ```
@@ -113,7 +122,6 @@ end
 ### (2) 購入処理シーケンス
 
 ```mermaid 
-
 ---
 title: 購入処理シーケンス
 config:
@@ -132,14 +140,13 @@ end
 box データ流通システム:　コア機能
   participant CORE_L2 as データ流通(L2)
   participant CORE_L3 as 認証・認可(L3)
+  participant AUTHZ as 認可(OpenFGA)
 end
 
 box 精算決済
   participant PAYMENT as 精算決済API
   participant PAYMENT_DB1 as 精算決済DB
   participant PAYMENT_DUMMY as 外部決済サービスダミー
-  participant AUTHZ as 認可(OpenFGA)
-  
 end
 
 box データ提供者環境
@@ -189,6 +196,8 @@ opt データ交換登録(データ提供者)
   CORE_L3-->>PAYMENT: OK
   PAYMENT->>AUTHZ: 認可確認
   AUTHZ-->>PAYMENT: 認可確認結果
+  PAYMENT->>PAYMENT_DB1: 取引情報登録・更新(INSERT/UPDATE)
+  PAYMENT_DB1-->>PAYMENT: 登録結果
   PAYMENT-->>CORE_L2: 200 OK
   CORE_L2-->>P_SA: 200 OK
 end
@@ -201,6 +210,8 @@ opt データ交換登録(データ消費者)
   CORE_L3-->>PAYMENT: OK
   PAYMENT->>AUTHZ: 認可確認
   AUTHZ-->>PAYMENT: 認可確認結果
+  PAYMENT->>PAYMENT_DB1: 取引情報登録・更新(INSERT/UPDATE)
+  PAYMENT_DB1-->>PAYMENT: 登録結果
   PAYMENT-->>CORE_L2: 200 OK
   CORE_L2-->>C_SA: 200 OK
 end
@@ -212,7 +223,6 @@ end
 - L2ログは精算決済側ログ格納場所に、定期的に格納されていることが前提
 
 ```mermaid 
-
 ---
 title: 購入確定処理シーケンス
 config:
@@ -236,7 +246,7 @@ end
 box 精算決済
   participant PAYMENT as 精算決済API
   participant PAYMENT_DB1 as 精算決済DB
-  participant S3 as ログ(L2から取得済)
+  participant LOG as ログ格納場所(L2から取得済)
 end
 
 box データ提供者環境
@@ -245,8 +255,8 @@ box データ提供者環境
 end
 
 opt 購入確定処理
-  PAYMENT->>S3: データ交換ログ取得
-  S3-->>PAYMENT: L2ログ
+  PAYMENT->>LOG: データ交換ログ取得
+  LOG-->>PAYMENT: L2ログ
   PAYMENT->>PAYMENT_DB1: 取引履歴(Transaction)取得
   PAYMENT_DB1-->>PAYMENT: 取引履歴(Transaction)
   PAYMENT-->>PAYMENT: 取引履歴(Transaction)のレコード毎にデータ交換ログを確認
@@ -260,7 +270,6 @@ end
 - ※消費者データ交換ステータス、提供者データ交換ステータスが交換完了、L2ログステータスが成功しているTransactionを請求予定額、支払い予定額の対象とする。
 
 ```mermaid 
-
 ---
 title: 決済処理シーケンス
 config:
@@ -279,12 +288,12 @@ end
 box データ流通システム:　コア機能
   participant CORE_L2 as データ流通(L2)
   participant CORE_L3 as 認証・認可(L3)
+  participant AUTHZ as 認可(OpenFGA)
 end
 
 box 精算決済
   participant PAYMENT as 精算決済API
   participant PAYMENT_DB as 精算決済DB
-  participant AUTHZ as 認可(OpenFGA)
 end
 
 box データ提供者環境
@@ -299,8 +308,8 @@ CORE_L3-->>P_SA: IDトークン+アクセストークン
 
 
 %% --- 請求予定額取得--
-P_SA->>CORE_L2:　POST /api/v1/payment<BR>(アクセストークン)
-CORE_L2->>PAYMENT:　POST /api/v1/payment<BR>(アクセストークン)
+P_SA->>CORE_L2:　POST /api/v1/billing<BR>(アクセストークン)
+CORE_L2->>PAYMENT:　POST /api/v1/billing<BR>(アクセストークン)
 
 PAYMENT->>CORE_L3: アクセストークン検証/権限確認
 CORE_L3-->>PAYMENT: OK
@@ -318,8 +327,8 @@ C_SA->>CORE_L3: 認証要求 (認可コードフロー)
 CORE_L3-->>C_SA: IDトークン+アクセストークン
 
 %% --- 支払予定額取得--
-C_SA->>CORE_L2:　POST /api/v1/billing<BR>(アクセストークン)
-CORE_L2->>PAYMENT:　POST /api/v1/billing<BR>(アクセストークン)
+C_SA->>CORE_L2:　POST /api/v1/payment<BR>(アクセストークン)
+CORE_L2->>PAYMENT:　POST /api/v1/payment<BR>(アクセストークン)
 
 PAYMENT->>CORE_L3: アクセストークン検証/権限確認
 CORE_L3-->>PAYMENT: OK
@@ -339,7 +348,6 @@ CORE_L2-->>C_SA: 200 OK
 - 期間指定・精算決済状態（settled/unsettled/cancelled）による絞り込みが可能
 
 ```mermaid
-
 ---
 title: 決済状態取得シーケンス
 config:
@@ -358,12 +366,12 @@ end
 box データ流通システム:　コア機能
   participant CORE_L2 as データ流通(L2)
   participant CORE_L3 as 認証・認可(L3)
+  participant AUTHZ as 認可(OpenFGA)
 end
 
 box 精算決済
   participant PAYMENT as 精算決済API
   participant PAYMENT_DB as 精算決済DB
-  participant AUTHZ as 認可(OpenFGA)
 end
 
 box データ提供者環境
@@ -394,7 +402,6 @@ CORE_L2-->>P_SA: 200 OK
 ### (6) 利用料モデルなし取引シーケンス ※通常使用しないシーケンス
 
 ```mermaid
-
 ---
 title: 利用料モデルなし取引シーケンス
 config:
@@ -413,13 +420,13 @@ end
 box データ流通システム:　コア機能
   participant CORE_L2 as データ流通(L2)
   participant CORE_L3 as 認証・認可(L3)
+  participant AUTHZ as 認可(OpenFGA)
 end
 
 box 精算決済
   participant PAYMENT as 精算決済API
   participant PAYMENT_DB1 as 精算決済DB
   participant PAYMENT_DUMMY as 外部決済サービスダミー
-  participant AUTHZ as 認可(OpenFGA)
 end
 
 box データ提供者環境
@@ -913,3 +920,14 @@ logger.info(
 | HTTPException | WARNING/ERROR | status_code, detail |
 | DatabaseError | ERROR | error, traceback |
 | 未処理例外 | ERROR | traceback |
+
+---
+
+## 4. 改訂履歴
+
+| 版   | 日付         | 変更点                                                                                                       |
+| --- | ---------- | --------------------------------------------------------------------------------------------------------- |
+| 1.0 | 2026-02-28 | 第1.0版 |
+| 1.1 | 2026-08-31 | 第1.1版 |
+
+---
