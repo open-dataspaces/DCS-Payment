@@ -36,6 +36,7 @@
 │   └── versions/         # マイグレーションスクリプト
 │
 ├── docker/                # Docker関連ファイル
+│   ├── README.md         # Docker環境構築・起動手順
 │   ├── Dockerfile        # 本番用Dockerfile
 │   ├── Dockerfile.dev    # 開発用Dockerfile
 │   ├── docker-compose.yml # ローカル開発用Compose
@@ -70,6 +71,7 @@
 
 | ドキュメント | 説明 |
 |------------|------|
+| [Docker環境構築・起動手順](docker/README.md) | ローカルDocker環境でのセットアップ・起動・テスト手順 |
 | [基本設計](docs/basic_design.md) | システムアーキテクチャ、全体構成 |
 | [詳細設計](docs/detail_design.md) | 詳細シーケンス、データ設計 |
 | [OpenAPI仕様 (JSON)](docs/openapi/openapi.json) | API仕様（機械可読形式） |
