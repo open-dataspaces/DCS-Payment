@@ -805,15 +805,41 @@ class TransactionService:
             new_status = "completed" if request.status == DataExchangeStatus.COMPLETED else "failed"
 
             # operator_idに基づいて更新対象を判定
+            # 取引当事者（provider/consumer）以外のオペレータによる更新は拒否する
             if operator_id == first.provider_id:
                 target_column = "provider_exchange_status"
             elif operator_id == first.consumer_id:
                 target_column = "consumer_exchange_status"
             else:
-                target_column = "consumer_exchange_status"
+                logger.warning(
+                    "operator_id does not match provider_id or consumer_id",
+                    tracking_id=str(tracking_id),
+                    operator_id=operator_id,
+                    provider_id=first.provider_id,
+                    consumer_id=first.consumer_id,
+                )
+                raise BusinessRuleViolationError(
+                    message="operator_id does not match provider_id or consumer_id",
+                    rule="operator_id_match"
+                )
 
+            old_status = None
             for transaction in transactions:
                 old_status = getattr(transaction, target_column)
+                # failed -> completed への遷移は許可しない（POST側と同じガード）
+                if old_status == "failed" and new_status == "completed":
+                    logger.warning(
+                        "Status mismatch: cannot change from failed to completed",
+                        tracking_id=str(tracking_id),
+                        column=target_column,
+                        existing_status=old_status,
+                        new_status=new_status,
+                        operator_id=operator_id
+                    )
+                    raise ResourceConflictError(
+                        message=f"Status mismatch: existing={old_status}, new={new_status}. Cannot change from failed to completed.",
+                        resource="Transaction"
+                    )
                 setattr(transaction, target_column, new_status)
                 self.transaction_repo.update(transaction)
 
@@ -832,11 +858,12 @@ class TransactionService:
                 detail="Data exchange status updated"
             )
 
-        except RecordNotFoundError as e:
+        except (RecordNotFoundError, BusinessRuleViolationError, ResourceConflictError) as e:
             self.db.rollback()
             logger.warning(
-                "Data exchange status update failed - not found",
+                "Data exchange status update failed - validation error",
                 tracking_id=request.tracking_id,
+                error_type=type(e).__name__,
                 error_message=str(e)
             )
             raise
