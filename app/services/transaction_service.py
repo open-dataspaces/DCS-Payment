@@ -784,6 +784,7 @@ class TransactionService:
             # 各データIDについてトランザクションを作成
             transaction_count = 0
 
+            fee_models_by_data_id = {}
             for data_id in request.data_id_list:
                 # アクティブな利用料モデルを取得
                 fee_model = self.fee_model_repo.get_active_by_identifiers(
@@ -803,6 +804,30 @@ class TransactionService:
                         entity="fee_model",
                         identifier=f"provider={request.provider_id}, consumer={request.consumer_id}, data={data_id}"
                     )
+                fee_models_by_data_id[data_id] = fee_model
+
+            # 外部決済サービスへの取引登録（与信）が必要な決済サービスの取引は、
+            # 取引可否API による事前登録（与信OK）が無い限り登録しない。
+            # 与信 NG / 未実施の取引が NP 登録なしのままローカルで請求対象になるのを防ぐ。
+            if settings.EXTERNAL_PAYMENT_ENABLED:
+                requiring_eligibility = sorted({
+                    data_id
+                    for data_id, fm in fee_models_by_data_id.items()
+                    if self.payment_client.supports_transaction_registration(str(fm.payment_service_id))
+                })
+                if requiring_eligibility:
+                    logger.warning(
+                        "No pre-registered transaction for tracking_id - eligibility check required",
+                        tracking_id=str(tracking_id),
+                        data_ids=requiring_eligibility,
+                    )
+                    raise RecordNotFoundError(
+                        entity="pre-registered transaction (eligibility check required)",
+                        identifier=f"tracking_id={tracking_id}, data_id={', '.join(requiring_eligibility)}"
+                    )
+
+            for data_id in request.data_id_list:
+                fee_model = fee_models_by_data_id[data_id]
 
                 # 履歴としてスナップショットを作成
                 history = self.history_repo.create_snapshot(
