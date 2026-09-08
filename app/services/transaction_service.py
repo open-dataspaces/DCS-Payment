@@ -40,6 +40,7 @@ from app.repositories.payment_repository import (
     TransactionRepository,
     PaymentServiceUserRegistrationRepository,
 )
+from app.utils.money import calculate_amount_with_tax, to_decimal
 
 logger = get_logger(__name__)
 
@@ -369,7 +370,7 @@ class TransactionService:
             )
 
         # リクエストから取引情報を構築
-        price = Decimal(str(request.amount))
+        price = to_decimal(request.amount)
         calculated_amount = self._calculate_amount_with_tax(
             price=price,
             tax_rate=request.tax_rate,
@@ -446,7 +447,7 @@ class TransactionService:
             )
 
             # NP取引登録成功後、Transactionレコードを事前登録
-            pre_reg_price = Decimal(str(request.amount))
+            pre_reg_price = to_decimal(request.amount)
             pre_reg_amount = self._calculate_amount_with_tax(
                 price=pre_reg_price,
                 tax_rate=request.tax_rate,
@@ -903,23 +904,16 @@ class TransactionService:
         tax_rate: Decimal,
         tax_classification: str
     ) -> Decimal:
-        """税込金額を計算"""
-        if tax_classification == "taxable":
-            amount = price * (1 + tax_rate)
-            logger.debug(
-                "Calculated amount with tax",
-                price=str(price),
-                tax_rate=str(tax_rate),
-                calculated_amount=str(amount)
-            )
-            return amount
-
+        """税込金額を計算（円単位に丸め。app.utils.money に集約）"""
+        amount = calculate_amount_with_tax(price, tax_rate, tax_classification)
         logger.debug(
-            "Amount without tax (non-taxable)",
+            "Calculated amount",
             price=str(price),
-            tax_classification=tax_classification
+            tax_rate=str(tax_rate),
+            tax_classification=tax_classification,
+            calculated_amount=str(amount)
         )
-        return price
+        return amount
 
     def _build_delivery_info(
         self,
@@ -1068,7 +1062,7 @@ class TransactionService:
                 )
             else:
                 # 事前登録レコードがない場合は従来通り新規作成
-                price = Decimal(str(request.amount))
+                price = to_decimal(request.amount)
                 calculated_amount = self._calculate_amount_with_tax(
                     price=price,
                     tax_rate=request.tax_rate,

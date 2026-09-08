@@ -9,6 +9,7 @@ from uuid import uuid4
 from app.clients.base_client import BaseClient
 from app.core.config import settings
 from app.core.logging import get_logger
+from app.utils.money import tax_rate_to_percent, to_external_amount_str
 
 logger = get_logger(__name__)
 
@@ -340,19 +341,20 @@ class PaymentClient:
         # shopTransactionId は最大40文字: shop_transaction_id + "_" + index
         shop_txn_id = f"{shop_transaction_id}_{index}"[:40]
 
-        # 金額を整数に変換（NP掛け払いAPIは文字列で受け取る）
-        amount_int = int(transaction.amount)
-        tax_rate_percent = int(transaction.tax_rate * 100)
+        # 金額は円単位に丸め済みの値を受け取る（NP掛け払いAPIは整数円の文字列で受け取る）
+        # 丸めは app.utils.money に集約し、DB保存額と同じ値を送る
+        amount_str = to_external_amount_str(transaction.amount)
+        tax_rate_percent = tax_rate_to_percent(transaction.tax_rate)
 
         info: dict[str, Any] = {
             "requestId": uuid4().hex[:8],
             "shopTransactionId": shop_txn_id,
             "shopOrderDate": transaction.order_date.strftime("%Y-%m-%d"),
-            "totalAmount": str(amount_int),
+            "totalAmount": amount_str,
             "transactionDetails": [
                 {
                     "detail": transaction.detail,
-                    "price": str(amount_int),
+                    "price": amount_str,
                     "quantity": "1",
                     "billedTaxKind": f"T{tax_rate_percent:02d}",
                 }
@@ -360,7 +362,7 @@ class PaymentClient:
             "taxRateSummaries": [
                 {
                     "taxRate": str(tax_rate_percent),
-                    "totalAmount": str(amount_int),
+                    "totalAmount": amount_str,
                 }
             ],
         }

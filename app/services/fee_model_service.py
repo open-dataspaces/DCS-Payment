@@ -11,6 +11,7 @@ from uuid import UUID
 from sqlalchemy.orm import Session
 
 from app.core.custom_exceptions import (
+    BusinessRuleViolationError,
     RecordNotFoundError,
     OptimisticLockError,
     ResourceConflictError,
@@ -28,6 +29,7 @@ from app.repositories.payment_repository import (
     FeeModelHistoryRepository,
     PaymentServiceRepository,
 )
+from app.utils.money import validate_amount_range
 
 logger = get_logger(__name__)
 
@@ -285,6 +287,20 @@ class FeeModelService:
                 fee_model.is_active = request.is_active
                 updated_fields.append("is_active")
 
+            # 金額に関わる項目を変更する場合、部分更新後の値で税込金額が DB カラム上限を
+            # 超えないことを検証する（price だけ・tax_rate だけの更新では schema 側で検証できないため）。
+            # 金額に触れない更新（無効化など）は、旧仕様で登録された範囲外の行でも受け付ける。
+            if {"price", "tax_rate", "tax_classification"} & set(updated_fields):
+                try:
+                    validate_amount_range(
+                        fee_model.price, fee_model.tax_rate, fee_model.tax_classification
+                    )
+                except ValueError as e:
+                    raise BusinessRuleViolationError(
+                        message=str(e),
+                        rule="amount_range"
+                    )
+
             # バージョンをインクリメント
             fee_model.version += 1
 
@@ -302,7 +318,7 @@ class FeeModelService:
 
             return FeeModelResponse.model_validate(fee_model)
 
-        except (RecordNotFoundError, OptimisticLockError, ResourceConflictError) as e:
+        except (RecordNotFoundError, OptimisticLockError, ResourceConflictError, BusinessRuleViolationError) as e:
             self.db.rollback()
             execution_time = time.time() - start_time
             logger.error(

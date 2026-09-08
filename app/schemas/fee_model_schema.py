@@ -1,13 +1,32 @@
-from pydantic import BaseModel, Field, ConfigDict, field_validator, model_validator
+from pydantic import AfterValidator, BaseModel, Field, ConfigDict, field_validator, model_validator
 from enum import Enum
-from typing import List, Optional, Any, Dict
+from typing import Annotated, List, Optional, Any, Dict
 from datetime import datetime, date
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from uuid import UUID
+
+from app.utils.money import MAX_AMOUNT, to_decimal, validate_amount_range
 
 # ========================================
 # 定義
 # ========================================
+
+
+def _amount_to_decimal(v: float) -> Decimal:
+    """リクエストの金額（float）を Decimal にし、小数 2 桁に四捨五入する
+
+    前回リリースと同じく数値をそのまま受け付け（小数 3 桁以上も可）、DB カラム（Numeric(15,2)）と
+    同じ桁・同じ丸め（四捨五入）にそろえる。丸めた値を DB 保存・NP 送信の両方に使うため値が一致する。
+    """
+    d = to_decimal(v)
+    if not d.is_finite():
+        raise ValueError("amount must be a finite number")
+    return d.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+
+# 利用料モデルなしの金額。OpenAPI 上は前回リリースと同じ number のまま、受け取った値は Decimal にする
+# （0・負の値も可。範囲 ±MAX_AMOUNT・税込金額の範囲は validate_amount_range で検証する）
+RequestAmount = Annotated[float, AfterValidator(_amount_to_decimal)]
 
 class TaxClassification(str, Enum):
     """税区分
@@ -88,8 +107,10 @@ def round_decimal(value: Decimal, decimal_places: int) -> Decimal:
 class FeeModelCoreFields(BaseModel):
     """利用料モデルのコアフィールド（更新可能）"""
 
+    # 金額の範囲（±MAX_AMOUNT 以内・税込で DB カラム上限以内）は入力時のみ検証する（FeeModelCreateRequest）。
+    # レスポンスでも検証すると、旧仕様で登録された範囲外の行が1件あるだけで一覧取得が 500 になるため。
     fee_model_name: str = Field(..., description="利用料モデル名", min_length=1, max_length=255)
-    price: Decimal = Field(..., description="金額", ge=Decimal("-9999999999999.99"), le=Decimal("9999999999999.99"))
+    price: Decimal = Field(..., description="金額")
     tax_classification: TaxClassification = Field(
         ...,
         description="税区分 (taxable: 課税, non_taxable: 非課税)"
@@ -185,9 +206,18 @@ class FeeModelCreateRequest(
     - created_at, updated_at（現在時刻）
     """
     
+    # 0・負の値（値引き等）も受け付ける。範囲は DB カラム（Numeric(15,2)）に収まること
+    price: Decimal = Field(..., description="金額", ge=-MAX_AMOUNT, le=MAX_AMOUNT)
+
     # デフォルト値を設定
     is_active: bool = Field(True, description="現在有効フラグ", strict=True)
     version: int = Field(1, description="バージョン番号", ge=1)
+
+    @model_validator(mode='after')
+    def validate_taxed_amount_range(self):
+        """税込金額が DB カラム上限（Numeric(15,2)）を超えないことを検証"""
+        validate_amount_range(self.price, self.tax_rate, self.tax_classification.value)
+        return self
     
     @field_validator('version')
     @classmethod
@@ -271,7 +301,7 @@ class FeeModelUpdateRequest(BaseModel):
         min_length=1,
         max_length=255
     )
-    price: Optional[Decimal] = Field(None, description="金額", ge=Decimal("-9999999999999.99"), le=Decimal("9999999999999.99"))
+    price: Optional[Decimal] = Field(None, description="金額", ge=-MAX_AMOUNT, le=MAX_AMOUNT)
     tax_classification: Optional[TaxClassification] = Field(
         None, 
         description="税区分 (taxable: 課税, non_taxable: 非課税)"
@@ -379,6 +409,7 @@ class PaymentAmountItem(BaseModel):
     consumer_id: str = Field(..., description="データ利用者ID")
     data_id_list: List[str] = Field(..., description="データIDのリスト")
     completed_at: datetime = Field(..., description="データ交換処理完了日時")
+    # 金額は円単位（整数）に丸めた値のため float でも誤差は生じない（API契約維持のため float のまま）
     amount: float = Field(..., description="支払い予定額")
     tax_rate: float = Field(..., description="税率")
 
@@ -395,6 +426,7 @@ class BillingAmountItem(BaseModel):
     consumer_id: str = Field(..., description="データ利用者ID")
     data_id_list: List[str] = Field(..., description="データIDのリスト")
     completed_at: datetime = Field(..., description="データ交換処理完了日時")
+    # 金額は円単位（整数）に丸めた値のため float でも誤差は生じない（API契約維持のため float のまま）
     amount: float = Field(..., description="請求予定額")
     tax_rate: float = Field(..., description="税率")
 
@@ -473,7 +505,13 @@ class TransactionEligibilityNonFeeModelRequest(BaseModel):
     tax_classification: TaxClassification = Field(..., description="税区分 (taxable: 課税, non_taxable: 非課税)")
     tax_rate: Decimal = Field(..., description="税率", decimal_places=4, ge=0, le=1)
     completed_at: datetime = Field(..., description="データ交換処理完了日時（ISO8601）")
-    amount: float = Field(..., description="支払い予定額")
+    amount: RequestAmount = Field(..., description="支払い予定額")
+
+    @model_validator(mode='after')
+    def validate_taxed_amount_range(self):
+        """税込金額が DB カラム上限（Numeric(15,2)）を超えないことを検証"""
+        validate_amount_range(self.amount, self.tax_rate, self.tax_classification.value)
+        return self
 
     model_config = ConfigDict(
         extra="forbid",  # 未定義フィールドを即座に拒否
@@ -490,7 +528,13 @@ class DataExchangeNonFeeModelRequest(BaseModel):
     tax_classification: TaxClassification = Field(..., description="税区分 (taxable: 課税, non_taxable: 非課税)")
     tax_rate: Decimal = Field(..., description="税率", decimal_places=4, ge=0, le=1)
     completed_at: datetime = Field(..., description="データ交換処理完了日時（ISO8601）")
-    amount: float = Field(..., description="支払い予定額")
+    amount: RequestAmount = Field(..., description="支払い予定額")
+
+    @model_validator(mode='after')
+    def validate_taxed_amount_range(self):
+        """税込金額が DB カラム上限（Numeric(15,2)）を超えないことを検証"""
+        validate_amount_range(self.amount, self.tax_rate, self.tax_classification.value)
+        return self
 
     model_config = ConfigDict(
         extra="forbid",  # 未定義フィールドを即座に拒否

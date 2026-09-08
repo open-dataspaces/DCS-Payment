@@ -11,6 +11,7 @@ from app.core.custom_exceptions import (
     DuplicateRecordError,
     OptimisticLockError,
     ResourceConflictError,
+    BusinessRuleViolationError,
     DatabaseError,
 )
 from app.core.logging import get_logger, set_request_id
@@ -310,6 +311,17 @@ async def update_fee_model(
         )
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
+            detail=str(e)
+        )
+    except BusinessRuleViolationError as e:
+        logger.warning(
+            "Request failed - business rule violation",
+            fee_model_id=str(uuid_id),
+            error=str(e),
+            status_code=400
+        )
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(e)
         )
     except DatabaseError as e:
