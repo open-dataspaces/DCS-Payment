@@ -412,6 +412,7 @@ class PaymentAmountItem(BaseModel):
     # 金額は円単位（整数）に丸めた値のため float でも誤差は生じない（API契約維持のため float のまま）
     amount: float = Field(..., description="支払い予定額")
     tax_rate: float = Field(..., description="税率")
+    settlement_status: Optional[str] = Field(None, description="精算状態（settled: L2ログ突合済みで確定, unsettled: 未確定）")
 
 class PaymentAmountListResponse(BaseModel):
     payment_details: List[PaymentAmountItem] = Field(..., description="支払いリスト")
@@ -429,6 +430,7 @@ class BillingAmountItem(BaseModel):
     # 金額は円単位（整数）に丸めた値のため float でも誤差は生じない（API契約維持のため float のまま）
     amount: float = Field(..., description="請求予定額")
     tax_rate: float = Field(..., description="税率")
+    settlement_status: Optional[str] = Field(None, description="精算状態（settled: L2ログ突合済みで確定, unsettled: 未確定）")
 
 class BillingAmountListResponse(BaseModel):
     billing_details: List[BillingAmountItem] = Field(..., description="請求リスト")

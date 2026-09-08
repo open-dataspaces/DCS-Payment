@@ -64,8 +64,11 @@ class Settings(BaseSettings):
 
     # ===========================================
     # L2 HTTPステータスフィルタ設定
+    # True: 支払/請求予定額に l2_http_status='200'（L2ログ突合で成功確認済み）の取引のみ含める
+    # False: L2ログ突合 CronJob を運用しない環境向け（L2 未確定の取引も含める）
+    # いずれの場合も settlement_status='cancelled' の取引は含めない
     # ===========================================
-    L2_HTTP_STATUS_FILTER_ENABLED: bool = False
+    L2_HTTP_STATUS_FILTER_ENABLED: bool = True
 
     # ===========================================
     # 外部決済サービス設定

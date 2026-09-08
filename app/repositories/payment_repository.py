@@ -651,9 +651,14 @@ class TransactionRepository:
         end_date: date,
         consumer_exchange_status: Optional[str] = None,
         provider_exchange_status: Optional[str] = None,
-        l2_http_status: Optional[str] = None
+        l2_http_status: Optional[str] = None,
+        exclude_settlement_statuses: Optional[List[str]] = None,
     ) -> List[Transaction]:
-        """コンシューマーIDとプロバイダーIDと期間で取引一覧を取得"""
+        """コンシューマーIDとプロバイダーIDと期間で取引一覧を取得
+
+        Args:
+            exclude_settlement_statuses: 除外する settlement_status（例: ['cancelled']）
+        """
         logger.debug(
             "Listing transactions by consumer and provider",
             consumer_id=consumer_id,
@@ -678,6 +683,8 @@ class TransactionRepository:
             query = query.filter(Transaction.provider_exchange_status == provider_exchange_status)
         if l2_http_status:
             query = query.filter(Transaction.l2_http_status == l2_http_status)
+        if exclude_settlement_statuses:
+            query = query.filter(Transaction.settlement_status.notin_(exclude_settlement_statuses))
 
         transactions = query.all()
 
