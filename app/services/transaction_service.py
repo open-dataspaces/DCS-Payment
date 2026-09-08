@@ -243,58 +243,78 @@ class TransactionService:
                     external_transaction_ids=external_ids_by_data_id,
                 )
 
-                # NP取引登録成功後、各fee_modelに対してTransactionレコードを事前登録
-                # external_transaction_id は item（data_id）ごとに個別の値を保存する
-                for fm in fee_models:
-                    if str(fm.payment_service_id) == payment_service_id:
-                        external_transaction_id = external_ids_by_data_id.get(fm.data_id)
-                        if not external_transaction_id:
-                            raise BusinessRuleViolationError(
-                                message=f"external_transaction_id not returned for data_id={fm.data_id}",
-                                rule="external_transaction_id_required",
-                            )
-                        history = self.history_repo.create_snapshot(
-                            fee_model=fm,
-                            change_type="snapshot",
-                            change_reason="Transaction pre-registered via eligibility check"
-                        )
-
-                        payment_user_for_txn = self.payment_user_repo.get_by_identifiers(
-                            payment_service_id=fm.payment_service_id,
-                            consumer_id=request.consumer_id,
-                            provider_id=request.provider_id
-                        )
-                        if not payment_user_for_txn:
-                            raise RecordNotFoundError(
-                                entity="Payment Service User Registration",
-                                identifier=f"payment_service={fm.payment_service_id}, consumer={request.consumer_id}, provider={request.provider_id}"
+                try:
+                    # NP取引登録成功後、各fee_modelに対してTransactionレコードを事前登録
+                    # external_transaction_id は item（data_id）ごとに個別の値を保存する
+                    for fm in fee_models:
+                        if str(fm.payment_service_id) == payment_service_id:
+                            external_transaction_id = external_ids_by_data_id.get(fm.data_id)
+                            if not external_transaction_id:
+                                raise BusinessRuleViolationError(
+                                    message=f"external_transaction_id not returned for data_id={fm.data_id}",
+                                    rule="external_transaction_id_required",
+                                )
+                            history = self.history_repo.create_snapshot(
+                                fee_model=fm,
+                                change_type="snapshot",
+                                change_reason="Transaction pre-registered via eligibility check"
                             )
 
-                        calculated_amount = self._calculate_amount_with_tax(
-                            price=fm.price,
-                            tax_rate=fm.tax_rate,
-                            tax_classification=fm.tax_classification
-                        )
+                            payment_user_for_txn = self.payment_user_repo.get_by_identifiers(
+                                payment_service_id=fm.payment_service_id,
+                                consumer_id=request.consumer_id,
+                                provider_id=request.provider_id
+                            )
+                            if not payment_user_for_txn:
+                                raise RecordNotFoundError(
+                                    entity="Payment Service User Registration",
+                                    identifier=f"payment_service={fm.payment_service_id}, consumer={request.consumer_id}, provider={request.provider_id}"
+                                )
 
-                        transaction = Transaction(
-                            tracking_id=None,  # データ交換状態登録APIで更新
-                            external_transaction_id=external_transaction_id,
-                            fee_model_history_id=history.fee_model_history_id,
-                            payment_service_user_id=payment_user_for_txn.payment_service_user_id,
-                            provider_id=request.provider_id,
-                            consumer_id=request.consumer_id,
-                            data_id=fm.data_id,
-                            snapshot_price=fm.price,
-                            snapshot_tax_rate=fm.tax_rate,
-                            snapshot_tax_classification=fm.tax_classification,
-                            calculated_amount=calculated_amount,
-                            consumer_exchange_status="pending",
-                            provider_exchange_status="pending",
-                            l2_http_status="pending",
-                        )
-                        self.transaction_repo.create(transaction)
+                            calculated_amount = self._calculate_amount_with_tax(
+                                price=fm.price,
+                                tax_rate=fm.tax_rate,
+                                tax_classification=fm.tax_classification
+                            )
 
-                self.db.commit()
+                            transaction = Transaction(
+                                tracking_id=None,  # データ交換状態登録APIで更新
+                                external_transaction_id=external_transaction_id,
+                                fee_model_history_id=history.fee_model_history_id,
+                                payment_service_user_id=payment_user_for_txn.payment_service_user_id,
+                                provider_id=request.provider_id,
+                                consumer_id=request.consumer_id,
+                                data_id=fm.data_id,
+                                snapshot_price=fm.price,
+                                snapshot_tax_rate=fm.tax_rate,
+                                snapshot_tax_classification=fm.tax_classification,
+                                calculated_amount=calculated_amount,
+                                consumer_exchange_status="pending",
+                                provider_exchange_status="pending",
+                                l2_http_status="pending",
+                            )
+                            self.transaction_repo.create(transaction)
+
+                    self.db.commit()
+
+                except Exception as e:
+                    # NP側には取引が登録済みだがローカル保存に失敗した。
+                    # 再試行で二重登録にならないよう NP側の取引を取り消す（補償処理）。
+                    self.db.rollback()
+                    logger.error(
+                        "Local transaction save failed after external registration - cancelling external transactions",
+                        payment_service_id=payment_service_id,
+                        external_transaction_ids=registration_result.registered_external_transaction_ids,
+                        error_type=type(e).__name__,
+                        error=str(e),
+                        exc_info=True,
+                    )
+                    await self._cancel_external_transactions_best_effort(
+                        payment_service_id=payment_service_id,
+                        external_transaction_ids=registration_result.registered_external_transaction_ids,
+                        reason="local save failed after external registration",
+                    )
+                    raise
 
                 logger.info(
                     "Transaction records pre-registered",
@@ -464,32 +484,52 @@ class TransactionService:
                 external_transaction_id=registration_result.external_transaction_id,
             )
 
-            # NP取引登録成功後、Transactionレコードを事前登録
-            pre_reg_price = to_decimal(request.amount)
-            pre_reg_amount = self._calculate_amount_with_tax(
-                price=pre_reg_price,
-                tax_rate=request.tax_rate,
-                tax_classification=request.tax_classification.value,
-            )
+            try:
+                # NP取引登録成功後、Transactionレコードを事前登録
+                pre_reg_price = to_decimal(request.amount)
+                pre_reg_amount = self._calculate_amount_with_tax(
+                    price=pre_reg_price,
+                    tax_rate=request.tax_rate,
+                    tax_classification=request.tax_classification.value,
+                )
 
-            transaction = Transaction(
-                tracking_id=None,  # データ交換状態登録APIで更新
-                external_transaction_id=registration_result.external_transaction_id,
-                fee_model_history_id=None,  # 利用料モデル無し
-                payment_service_user_id=None,  # 利用料モデル無し
-                provider_id=request.provider_id,
-                consumer_id=request.consumer_id,
-                data_id=None,  # 利用料モデル無し
-                snapshot_price=pre_reg_price,
-                snapshot_tax_rate=request.tax_rate,
-                snapshot_tax_classification=request.tax_classification.value,
-                calculated_amount=pre_reg_amount,
-                consumer_exchange_status="pending",
-                provider_exchange_status="pending",
-                l2_http_status="pending",
-            )
-            self.transaction_repo.create(transaction)
-            self.db.commit()
+                transaction = Transaction(
+                    tracking_id=None,  # データ交換状態登録APIで更新
+                    external_transaction_id=registration_result.external_transaction_id,
+                    fee_model_history_id=None,  # 利用料モデル無し
+                    payment_service_user_id=None,  # 利用料モデル無し
+                    provider_id=request.provider_id,
+                    consumer_id=request.consumer_id,
+                    data_id=None,  # 利用料モデル無し
+                    snapshot_price=pre_reg_price,
+                    snapshot_tax_rate=request.tax_rate,
+                    snapshot_tax_classification=request.tax_classification.value,
+                    calculated_amount=pre_reg_amount,
+                    consumer_exchange_status="pending",
+                    provider_exchange_status="pending",
+                    l2_http_status="pending",
+                )
+                self.transaction_repo.create(transaction)
+                self.db.commit()
+
+            except Exception as e:
+                # NP側には取引が登録済みだがローカル保存に失敗した。
+                # 再試行で二重登録にならないよう NP側の取引を取り消す（補償処理）。
+                self.db.rollback()
+                logger.error(
+                    "Local transaction save failed after external registration - cancelling external transactions",
+                    payment_service_id=payment_service_id,
+                    external_transaction_ids=registration_result.registered_external_transaction_ids,
+                    error_type=type(e).__name__,
+                    error=str(e),
+                    exc_info=True,
+                )
+                await self._cancel_external_transactions_best_effort(
+                    payment_service_id=payment_service_id,
+                    external_transaction_ids=registration_result.registered_external_transaction_ids,
+                    reason="local save failed after external registration (non fee model)",
+                )
+                raise
 
             logger.info(
                 "Transaction record pre-registered (non fee model)",
@@ -1084,6 +1124,7 @@ class TransactionService:
             amount=request.amount,
         )
 
+        billed_external_ids: list[str] = []
         try:
             # 事前登録レコード（tracking_id=NULL）を検索
             pre_registered = self.transaction_repo.get_by_identifiers_without_tracking_id(
@@ -1113,6 +1154,7 @@ class TransactionService:
                     payment_service_id=str(request.payment_service_id),
                     records=pre_registered,
                 )
+                billed_external_ids = [r.external_transaction_id for r in pre_registered if r.request_date]
             else:
                 # 事前登録レコードがない場合は従来通り新規作成
                 price = to_decimal(request.amount)
@@ -1167,6 +1209,16 @@ class TransactionService:
             raise
         except Exception as e:
             self.db.rollback()
+            if billed_external_ids:
+                # 請求確定はNP側で完了しているがローカル保存に失敗した。
+                # 請求確定の取り消しAPIは無いため、手動復旧が必要な旨を記録する。
+                logger.error(
+                    "Local save failed after NP billing request succeeded - manual recovery required",
+                    tracking_id=str(tracking_id),
+                    external_transaction_ids=billed_external_ids,
+                    error_type=type(e).__name__,
+                    error_message=str(e),
+                )
             logger.error(
                 "Unexpected error during data exchange confirmation (non fee model)",
                 tracking_id=str(tracking_id),
