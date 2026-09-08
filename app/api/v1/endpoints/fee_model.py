@@ -1,7 +1,7 @@
 import hashlib
 from email.utils import formatdate
 from time import mktime
-from uuid import UUID, uuid4
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy.orm import Session
@@ -58,7 +58,7 @@ async def create_fee_model(
     db: Session = Depends(get_db),
 ) -> FeeModelResponse:
     """利用料モデルを作成"""
-    request_id = headers.get('x-trackingId') or str(uuid4())
+    request_id = headers["x_tracking_id"]
     set_request_id(request_id)
 
     logger.info(
@@ -149,7 +149,7 @@ async def list_fee_models(
     db: Session = Depends(get_db),
 ) -> FeeModelListResponse:
     """利用料モデル一覧を取得"""
-    request_id = headers.get('x-trackingId') or str(uuid4())
+    request_id = headers["x_tracking_id"]
     set_request_id(request_id)
 
     skip = 0
@@ -253,7 +253,7 @@ async def update_fee_model(
     db: Session = Depends(get_db),
 ) -> FeeModelResponse:
     """利用料モデルを更新"""
-    request_id = headers.get('x-trackingId') or str(uuid4())
+    request_id = headers["x_tracking_id"]
     set_request_id(request_id)
 
     logger.info(
@@ -362,7 +362,7 @@ async def delete_fee_model(
     db: Session = Depends(get_db),
 ):
     """利用料モデルを削除"""
-    request_id = headers.get('x-trackingId') or str(uuid4())
+    request_id = headers["x_tracking_id"]
     set_request_id(request_id)
 
     logger.info(

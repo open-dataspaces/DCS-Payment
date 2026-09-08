@@ -1,5 +1,3 @@
-from uuid import uuid4
-
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
@@ -70,7 +68,7 @@ async def check_transaction_eligibility(
 ) -> TransactionEligibilityResponse:
     """取引可否を確認"""
     # リクエストIDを設定
-    tracking_id = headers.get('x-trackingId') or str(uuid4())
+    tracking_id = headers["x_tracking_id"]
     set_request_id(tracking_id)
 
     logger.info(
@@ -165,7 +163,7 @@ async def register_data_exchange_status(
     トランザクション作成後、外部決済サービスが取引登録をサポートしている場合は
     取引登録APIを呼び出す。
     """
-    request_id = headers.get('x-trackingId') or str(uuid4())
+    request_id = headers["x_tracking_id"]
     set_request_id(request_id)
 
     logger.info(
@@ -321,7 +319,7 @@ async def update_data_exchange_status(
     db: Session = Depends(get_db),
 ) -> DataExchangeStatusResponse:
     """データ交換状態を更新"""
-    request_id = headers.get('x-trackingId') or str(uuid4())
+    request_id = headers["x_tracking_id"]
     set_request_id(request_id)
 
     # 登録者IDを取得
@@ -437,7 +435,7 @@ async def check_transaction_eligibility_non_fee_model(
     db: Session = Depends(get_db),
 ) -> TransactionEligibilityNonFeeModelResponse:
     """取引可否を確認（利用料モデル無し）"""
-    tracking_id = headers.get('x-trackingId') or str(uuid4())
+    tracking_id = headers["x_tracking_id"]
     set_request_id(tracking_id)
 
     logger.info(
@@ -534,7 +532,7 @@ async def confirm_data_exchange(
     利用料モデルを使用せず、リクエストで直接指定された金額で
     トランザクションを作成し、外部決済サービスに取引登録を実行する。
     """
-    request_id = headers.get('x-trackingId') or str(uuid4())
+    request_id = headers["x_tracking_id"]
     set_request_id(request_id)
 
     logger.info(
@@ -629,7 +627,7 @@ async def get_consumer_transactions(
     db: Session = Depends(get_db),
 ) -> ConsumerTransactionListResponse:
     """利用者トランザクションを取得"""
-    request_id = headers.get('x-trackingId') or str(uuid4())
+    request_id = headers["x_tracking_id"]
     set_request_id(request_id)
 
     # アクセストークン内のoperator_idをprovider_idとして使用
