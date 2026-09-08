@@ -585,7 +585,8 @@ class TransactionService:
                     tracking_id=tracking_uuid,
                     external_transaction_id=registration_result.external_transaction_id,
                     fee_model_history_id=None,  # 利用料モデル無し
-                    payment_service_user_id=None,  # 利用料モデル無し
+                    # 与信に使った決済サービスを確定時に照合できるよう保存する
+                    payment_service_user_id=payment_user.payment_service_user_id,
                     provider_id=request.provider_id,
                     consumer_id=request.consumer_id,
                     data_id=None,  # 利用料モデル無し
@@ -1151,6 +1152,44 @@ class TransactionService:
             np_transaction_ids=np_transaction_ids,
         )
 
+    def _ensure_confirm_matches_pre_registration(
+        self,
+        record: Transaction,
+        request: DataExchangeNonFeeModelRequest,
+        tracking_id: UUID,
+    ) -> None:
+        """確定リクエストの内容が与信時（事前登録）の内容と一致することを検証する
+
+        決済サービス・金額・税率・税区分が与信時と異なる確定は受け付けない。
+        （異なる値を許すと、NP側の与信・取引登録と異なる金額がローカルで請求対象になる）
+        """
+        mismatches = []
+        if record.payment_user is not None and \
+                record.payment_user.payment_service_id != request.payment_service_id:
+            mismatches.append(
+                f"payment_service_id: registered={record.payment_user.payment_service_id}, "
+                f"requested={request.payment_service_id}"
+            )
+        if record.snapshot_price != to_decimal(request.amount):
+            mismatches.append(f"amount: registered={record.snapshot_price}, requested={request.amount}")
+        if record.snapshot_tax_rate != to_decimal(request.tax_rate):
+            mismatches.append(f"tax_rate: registered={record.snapshot_tax_rate}, requested={request.tax_rate}")
+        if record.snapshot_tax_classification != request.tax_classification.value:
+            mismatches.append(
+                f"tax_classification: registered={record.snapshot_tax_classification}, "
+                f"requested={request.tax_classification.value}"
+            )
+        if mismatches:
+            logger.warning(
+                "Confirmation request does not match pre-registered transaction",
+                tracking_id=str(tracking_id),
+                mismatches=mismatches,
+            )
+            raise ResourceConflictError(
+                message="Confirmation does not match the pre-registered transaction: " + "; ".join(mismatches),
+                resource="Transaction",
+            )
+
     async def confirm_data_exchange_non_fee_model(
         self,
         request: DataExchangeNonFeeModelRequest,
@@ -1196,6 +1235,31 @@ class TransactionService:
                             message=f"Provider/Consumer ID mismatch for existing tracking_id: {tracking_id}",
                             resource="Transaction",
                         )
+                    self._ensure_confirm_matches_pre_registration(record, request, tracking_id)
+
+                # 請求確定に使う決済サービスは与信時に保存した値を正とする
+                stored_service_ids = {
+                    str(r.payment_user.payment_service_id) for r in pre_registered if r.payment_user
+                }
+                billing_payment_service_id = (
+                    stored_service_ids.pop() if len(stored_service_ids) == 1 else str(request.payment_service_id)
+                )
+
+                # 既に確定済み（再送）の場合は再登録・再請求せず成功を返す（冪等）
+                if all(
+                    r.consumer_exchange_status == "completed" and r.provider_exchange_status == "completed"
+                    for r in pre_registered
+                ):
+                    logger.info(
+                        "Data exchange already confirmed for tracking_id (idempotent)",
+                        tracking_id=str(tracking_id),
+                    )
+                    return DataExchangeStatusNonFeeModelResponse(
+                        status=ProcessStatus.SUCCESS,
+                        detail="Data exchange already confirmed"
+                    )
+
+                for record in pre_registered:
                     record.consumer_exchange_status = "completed"
                     record.provider_exchange_status = "completed"
                     self.transaction_repo.update(record)
@@ -1210,12 +1274,30 @@ class TransactionService:
 
                 # NP掛け払い請求確定依頼
                 await self._request_billing_if_applicable(
-                    payment_service_id=str(request.payment_service_id),
+                    payment_service_id=billing_payment_service_id,
                     records=pre_registered,
                 )
                 billed_external_ids = [r.external_transaction_id for r in pre_registered if r.request_date]
             else:
-                # 事前登録レコードがない場合は従来通り新規作成
+                # 外部決済サービスへの取引登録が必要なサービスでは、取引可否API による
+                # 事前登録（与信・NP取引登録）が無い取引を確定させない
+                # （NP に取引が無いままローカルだけ請求対象になるのを防ぐ）
+                payment_service_id = str(request.payment_service_id)
+                if (
+                    settings.EXTERNAL_PAYMENT_ENABLED
+                    and self.payment_client.supports_transaction_registration(payment_service_id)
+                ):
+                    logger.warning(
+                        "No pre-registered transaction for tracking_id - eligibility check required",
+                        tracking_id=str(tracking_id),
+                        payment_service_id=payment_service_id,
+                    )
+                    raise RecordNotFoundError(
+                        entity="pre-registered transaction (eligibility check required)",
+                        identifier=str(tracking_id),
+                    )
+
+                # 外部決済サービス連携が不要な場合のみ新規作成
                 price = to_decimal(request.amount)
                 calculated_amount = self._calculate_amount_with_tax(
                     price=price,
@@ -1256,6 +1338,15 @@ class TransactionService:
                 detail="Data exchange confirmed"
             )
 
+        except (RecordNotFoundError, ResourceConflictError, BusinessRuleViolationError) as e:
+            self.db.rollback()
+            logger.warning(
+                "Data exchange confirmation failed - validation error",
+                tracking_id=str(tracking_id),
+                error_type=type(e).__name__,
+                error_message=str(e),
+            )
+            raise
         except PaymentClientError as e:
             self.db.rollback()
             logger.error(
