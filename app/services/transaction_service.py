@@ -220,26 +220,39 @@ class TransactionService:
                         provider_id=request.provider_id,
                         consumer_id=request.consumer_id,
                         payment_service_id=payment_service_id,
-                        authori_result=registration_result.authori_result,
-                        authori_ng_reason=registration_result.authori_ng_reason,
+                        ng_count=len(registration_result.ng_items),
+                        ok_count=len(registration_result.ok_items),
                         detail=registration_result.detail,
+                    )
+                    # 1件でも NG なら取引全体を不可とし、NP側で採番済みの取引は取り消す
+                    await self._cancel_external_transactions_best_effort(
+                        payment_service_id=payment_service_id,
+                        external_transaction_ids=registration_result.registered_external_transaction_ids,
+                        reason="authori NG on other item",
                     )
                     return TransactionEligibilityResponse(
                         status=TransactionEligibility.DENIED,
                         detail=f"Transaction authori failed: {registration_result.detail}"
                     )
 
+                external_ids_by_data_id = registration_result.external_transaction_id_by_data_id()
                 logger.info(
                     "NP Kakebarai transaction registration passed",
                     payment_service_id=payment_service_id,
                     consumer_id=request.consumer_id,
-                    authori_result=registration_result.authori_result,
-                    external_transaction_id=registration_result.external_transaction_id,
+                    external_transaction_ids=external_ids_by_data_id,
                 )
 
                 # NP取引登録成功後、各fee_modelに対してTransactionレコードを事前登録
+                # external_transaction_id は item（data_id）ごとに個別の値を保存する
                 for fm in fee_models:
                     if str(fm.payment_service_id) == payment_service_id:
+                        external_transaction_id = external_ids_by_data_id.get(fm.data_id)
+                        if not external_transaction_id:
+                            raise BusinessRuleViolationError(
+                                message=f"external_transaction_id not returned for data_id={fm.data_id}",
+                                rule="external_transaction_id_required",
+                            )
                         history = self.history_repo.create_snapshot(
                             fee_model=fm,
                             change_type="snapshot",
@@ -265,7 +278,7 @@ class TransactionService:
 
                         transaction = Transaction(
                             tracking_id=None,  # データ交換状態登録APIで更新
-                            external_transaction_id=registration_result.external_transaction_id,
+                            external_transaction_id=external_transaction_id,
                             fee_model_history_id=history.fee_model_history_id,
                             payment_service_user_id=payment_user_for_txn.payment_service_user_id,
                             provider_id=request.provider_id,
@@ -287,7 +300,7 @@ class TransactionService:
                     "Transaction records pre-registered",
                     payment_service_id=payment_service_id,
                     consumer_id=request.consumer_id,
-                    external_transaction_id=registration_result.external_transaction_id,
+                    external_transaction_ids=external_ids_by_data_id,
                 )
 
                 checked_service_ids.add(payment_service_id)
@@ -432,6 +445,11 @@ class TransactionService:
                     authori_result=registration_result.authori_result,
                     authori_ng_reason=registration_result.authori_ng_reason,
                     detail=registration_result.detail,
+                )
+                await self._cancel_external_transactions_best_effort(
+                    payment_service_id=payment_service_id,
+                    external_transaction_ids=registration_result.registered_external_transaction_ids,
+                    reason="authori NG (non fee model)",
                 )
                 return TransactionEligibilityNonFeeModelResponse(
                     status=TransactionEligibility.DENIED,
@@ -914,6 +932,41 @@ class TransactionService:
             calculated_amount=str(amount)
         )
         return amount
+
+    async def _cancel_external_transactions_best_effort(
+        self,
+        payment_service_id: str,
+        external_transaction_ids: list[str],
+        reason: str,
+    ) -> None:
+        """外部決済サービスに採番済みの取引をキャンセルする（失敗しても例外にしない）
+
+        取引可否 NG やローカル保存失敗など、外部側だけに取引が残る状況を避けるための
+        補償処理。失敗した場合は ERROR ログを出し、運用で復旧する。
+        """
+        ids = [i for i in external_transaction_ids if i]
+        if not ids:
+            return
+        try:
+            await self.payment_client.cancel_transaction(
+                payment_service_id=payment_service_id,
+                np_transaction_ids=ids,
+            )
+            logger.info(
+                "External transactions cancelled (compensation)",
+                payment_service_id=payment_service_id,
+                external_transaction_ids=ids,
+                reason=reason,
+            )
+        except Exception as e:  # noqa: BLE001 - 補償処理は呼び出し元の結果を変えない
+            logger.error(
+                "Failed to cancel external transactions (compensation) - manual recovery required",
+                payment_service_id=payment_service_id,
+                external_transaction_ids=ids,
+                reason=reason,
+                error=str(e),
+                exc_info=True,
+            )
 
     def _build_delivery_info(
         self,

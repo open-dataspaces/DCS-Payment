@@ -24,8 +24,56 @@ class NpKakebaraiClientError(Exception):
     pass
 
 
+NP_AUTHORI_OK = "00"
+
+NP_AUTHORI_NG_REASONS = {
+    "21": "未払いNG",
+    "22": "金額超過NG",
+    "24": "総合判断NG",
+}
+
+
+class TransactionItemResult:
+    """取引登録結果（取引 item 単位）
+
+    NP掛け払いは複数 item を1リクエストで登録でき、item ごとに npTransactionId と
+    審査結果が返る。item は shopTransactionId（"{shop_transaction_id}_{index}"）で
+    送信した取引と対応付ける。
+    """
+
+    def __init__(
+        self,
+        index: int,
+        shop_transaction_id: str,
+        data_id: Optional[str],
+        external_transaction_id: Optional[str],
+        authori_result: Optional[str],
+        authori_ng_reason: Optional[str] = None,
+    ):
+        self.index = index
+        self.shop_transaction_id = shop_transaction_id
+        self.data_id = data_id
+        self.external_transaction_id = external_transaction_id
+        self.authori_result = authori_result
+        self.authori_ng_reason = authori_ng_reason
+
+    @property
+    def is_success(self) -> bool:
+        return self.authori_result == NP_AUTHORI_OK
+
+    @property
+    def ng_reason_text(self) -> str:
+        return NP_AUTHORI_NG_REASONS.get(
+            self.authori_ng_reason, f"Unknown({self.authori_ng_reason})"
+        )
+
+
 class TransactionRegistrationResult:
-    """取引登録結果"""
+    """取引登録結果（リクエスト単位）
+
+    is_success は全 item の審査が OK の場合のみ True。
+    items に item 単位の結果を保持する。
+    """
 
     def __init__(
         self,
@@ -37,15 +85,35 @@ class TransactionRegistrationResult:
         authori_result: Optional[str] = None,
         authori_ng_reason: Optional[str] = None,
         external_transaction_id: Optional[str] = None,
+        items: Optional[list[TransactionItemResult]] = None,
     ):
         self.is_success = is_success
         self.buyer_id = buyer_id
         self.transaction_count = transaction_count
         self.detail = detail
         self.raw_response = raw_response
-        self.authori_result = authori_result
-        self.authori_ng_reason = authori_ng_reason
-        self.external_transaction_id = external_transaction_id
+        self.items: list[TransactionItemResult] = items or []
+        first = self.items[0] if self.items else None
+        # 後方互換: 先頭 item の値
+        self.authori_result = authori_result if authori_result is not None else (first.authori_result if first else None)
+        self.authori_ng_reason = authori_ng_reason if authori_ng_reason is not None else (first.authori_ng_reason if first else None)
+        self.external_transaction_id = external_transaction_id if external_transaction_id is not None else (first.external_transaction_id if first else None)
+
+    @property
+    def ok_items(self) -> list[TransactionItemResult]:
+        return [it for it in self.items if it.is_success]
+
+    @property
+    def ng_items(self) -> list[TransactionItemResult]:
+        return [it for it in self.items if not it.is_success]
+
+    @property
+    def registered_external_transaction_ids(self) -> list[str]:
+        """NP側に登録された（審査OK/NGを問わず ID が採番された）取引ID"""
+        return [it.external_transaction_id for it in self.items if it.external_transaction_id]
+
+    def external_transaction_id_by_data_id(self) -> dict[Optional[str], Optional[str]]:
+        return {it.data_id: it.external_transaction_id for it in self.items}
 
 
 class TransactionInfo:
@@ -235,55 +303,88 @@ class PaymentClient:
                     raw_response=response,
                 )
 
-            # 審査結果をパース
-            authori_result = None
-            authori_ng_reason = None
-            external_transaction_id = None
-
+            # 審査結果を item ごとにパース
+            # shopTransactionId で送信 item と対応付ける（順序に依存しない）
             result_data = response.get("result", {})
             buyer_data = result_data.get("buyer", {})
             transaction_infoes = buyer_data.get("transactionInfoes", [])
 
-            if transaction_infoes:
-                first_txn = transaction_infoes[0]
-                external_transaction_id = first_txn.get("npTransactionId")
-                status_info = first_txn.get("status", {})
-                authori_info = status_info.get("transactionAuthoriInfo", {})
-                authori_result = authori_info.get("transactionAuthoriResult")
-                authori_ng_reason = authori_info.get("transactionAuthoriNgReason")
+            sent_by_shop_txn_id = {
+                info["shopTransactionId"]: (i, txn)
+                for i, (info, txn) in enumerate(zip(transaction_infos, transactions))
+            }
+            items: list[TransactionItemResult] = []
+            unmatched: list[str] = []
+            for entry in transaction_infoes:
+                shop_txn_id = entry.get("shopTransactionId")
+                status_info = entry.get("status", {}) or {}
+                authori_info = status_info.get("transactionAuthoriInfo", {}) or {}
+                if shop_txn_id not in sent_by_shop_txn_id:
+                    unmatched.append(shop_txn_id)
+                    continue
+                index, txn = sent_by_shop_txn_id[shop_txn_id]
+                items.append(TransactionItemResult(
+                    index=index,
+                    shop_transaction_id=shop_txn_id,
+                    data_id=txn.data_id,
+                    external_transaction_id=entry.get("npTransactionId"),
+                    authori_result=authori_info.get("transactionAuthoriResult"),
+                    authori_ng_reason=authori_info.get("transactionAuthoriNgReason"),
+                ))
+            items.sort(key=lambda it: it.index)
 
-            # 審査結果に基づいて成否を判定
-            is_success = (authori_result == "00")
-
-            if not is_success:
-                ng_reason_map = {
-                    "21": "未払いNG",
-                    "22": "金額超過NG",
-                    "24": "総合判断NG",
-                }
-                ng_reason_text = ng_reason_map.get(
-                    authori_ng_reason, f"Unknown({authori_ng_reason})"
+            missing = [
+                info["shopTransactionId"]
+                for info in transaction_infos
+                if info["shopTransactionId"] not in {it.shop_transaction_id for it in items}
+            ]
+            if unmatched or missing:
+                logger.error(
+                    "NP Kakebarai response items do not match request items",
+                    extra={
+                        "np_buyer_id": np_buyer_id,
+                        "unmatched_in_response": unmatched,
+                        "missing_in_response": missing,
+                    }
                 )
-                # NPエラーコードをdetailに含める
-                np_error_code = f"authori_result={authori_result}, ng_reason={authori_ng_reason}"
+                # 対応付けできない場合は成功扱いにしない（採番済みIDは呼び出し側でキャンセル可能）
+                return TransactionRegistrationResult(
+                    is_success=False,
+                    buyer_id=np_buyer_id,
+                    transaction_count=len(transactions),
+                    detail="Transaction registration error: response items do not match request",
+                    raw_response=response,
+                    items=items,
+                )
+
+            # 全 item の審査が OK の場合のみ成功
+            ng_items = [it for it in items if not it.is_success]
+            if ng_items:
+                ng_details = ", ".join(
+                    f"{it.data_id}: {it.ng_reason_text} "
+                    f"(authori_result={it.authori_result}, ng_reason={it.authori_ng_reason})"
+                    for it in ng_items
+                )
                 logger.warning(
                     "NP Kakebarai transaction authori NG",
                     extra={
                         "np_buyer_id": np_buyer_id,
-                        "authori_result": authori_result,
-                        "authori_ng_reason": authori_ng_reason,
-                        "ng_reason_text": ng_reason_text,
+                        "ng_count": len(ng_items),
+                        "ok_count": len(items) - len(ng_items),
+                        "ng_items": [
+                            {"data_id": it.data_id, "authori_result": it.authori_result,
+                             "authori_ng_reason": it.authori_ng_reason}
+                            for it in ng_items
+                        ],
                     }
                 )
                 return TransactionRegistrationResult(
                     is_success=False,
                     buyer_id=np_buyer_id,
                     transaction_count=len(transactions),
-                    detail=f"Transaction authori NG: {ng_reason_text} ({np_error_code})",
+                    detail=f"Transaction authori NG: {ng_details}",
                     raw_response=response,
-                    authori_result=authori_result,
-                    authori_ng_reason=authori_ng_reason,
-                    external_transaction_id=external_transaction_id,
+                    items=items,
                 )
 
             logger.info(
@@ -291,8 +392,7 @@ class PaymentClient:
                 extra={
                     "np_buyer_id": np_buyer_id,
                     "transaction_count": len(transactions),
-                    "authori_result": authori_result,
-                    "external_transaction_id": external_transaction_id,
+                    "external_transaction_ids": [it.external_transaction_id for it in items],
                 }
             )
 
@@ -302,9 +402,7 @@ class PaymentClient:
                 transaction_count=len(transactions),
                 detail="Transaction registration completed",
                 raw_response=response,
-                authori_result=authori_result,
-                authori_ng_reason=authori_ng_reason,
-                external_transaction_id=external_transaction_id,
+                items=items,
             )
 
         except NpKakebaraiClientError as e:
