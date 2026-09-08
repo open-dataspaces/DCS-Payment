@@ -574,8 +574,26 @@ class TransactionService:
                         rule="operator_id_match"
                     )
 
-                # 全レコードの対象ステータスを更新
-                for record in existing_records:
+                # リクエストで指定された data_id のレコードのみ更新対象にする。
+                # tracking_id 配下の全レコードを更新すると、報告されていないデータまで
+                # completed になり請求対象になってしまう。
+                requested_data_ids = set(request.data_id_list)
+                stored_data_ids = {r.data_id for r in existing_records}
+                unknown_data_ids = sorted(requested_data_ids - stored_data_ids)
+                if unknown_data_ids:
+                    logger.warning(
+                        "Requested data_id not found under tracking_id",
+                        tracking_id=str(tracking_id),
+                        unknown_data_ids=unknown_data_ids,
+                    )
+                    raise RecordNotFoundError(
+                        entity="transaction",
+                        identifier=f"tracking_id={tracking_id}, data_id={', '.join(unknown_data_ids)}"
+                    )
+                target_records = [r for r in existing_records if r.data_id in requested_data_ids]
+
+                # 対象レコードのステータスを更新
+                for record in target_records:
                     current_status = getattr(record, target_column)
                     if current_status == "failed" and new_status == "completed":
                         logger.warning(
@@ -601,7 +619,8 @@ class TransactionService:
                     tracking_id=str(tracking_id),
                     operator_id=operator_id,
                     updated_column=target_column,
-                    new_status=new_status
+                    new_status=new_status,
+                    updated_count=len(target_records),
                 )
 
                 return DataExchangeStatusResponse(
