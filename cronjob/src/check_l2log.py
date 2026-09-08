@@ -367,10 +367,21 @@ def get_np_headers():
     }
 
 
+def _np_response_has_errors(body):
+    """NP掛け払いAPIレスポンス本文にエラーが含まれるか"""
+    return isinstance(body, dict) and bool(body.get("errors"))
+
+
 def cancel_np_transactions(np_transaction_ids):
-    """NP掛け払い取引キャンセルAPI呼び出し"""
+    """NP掛け払い取引キャンセルAPI呼び出し
+
+    Returns:
+        list: キャンセルに成功した npTransactionId のリスト。
+              API エラー（HTTP エラー・本文に errors あり・例外）の場合は空リスト。
+              呼び出し側は成功した ID のみローカルを 'cancelled' に更新すること。
+    """
     if not NP_BASE_URL or not np_transaction_ids:
-        return None
+        return []
 
     headers = get_np_headers()
     payload = {
@@ -387,20 +398,26 @@ def cancel_np_transactions(np_transaction_ids):
         if resp.status_code >= 400:
             logger.error("NP取引キャンセルAPIエラーレスポンス: status=%s, body=%s, payload=%s",
                          resp.status_code, resp.text, payload)
-        resp.raise_for_status()
+            return []
         result = resp.json()
+        if _np_response_has_errors(result):
+            # どの取引が失敗したか特定できないため全件失敗扱い（次回 cron で再試行）
+            logger.error("NP取引キャンセルAPIが errors を返却: body=%s, payload=%s", result, payload)
+            return []
         logger.info("NP取引キャンセル完了: %d 件", len(np_transaction_ids))
-        return result
+        return list(np_transaction_ids)
     except Exception:
         logger.exception("NP取引キャンセルAPIエラー: %s", np_transaction_ids)
-        return None
+        return []
 
 
 def request_np_billing(np_transaction_records):
     """NP掛け払い請求確定依頼API呼び出し
 
     Args:
-        np_transaction_records: list of (np_transaction_id, created_at) tuples
+        np_transaction_records: list of (np_transaction_id, completed_at) tuples
+            completed_at はデータ交換完了日時（未設定の既存行は created_at）。
+            請求書発行基準日（billIssueBaseDate）として使用する。
     """
     if not NP_BASE_URL or not np_transaction_records:
         return None
@@ -410,9 +427,9 @@ def request_np_billing(np_transaction_records):
         "requests": [
             {
                 "npTransactionId": np_txn_id,
-                "billIssueBaseDate": created_at.strftime("%Y-%m-%d"),
+                "billIssueBaseDate": completed_at.strftime("%Y-%m-%d"),
             }
-            for np_txn_id, created_at in np_transaction_records
+            for np_txn_id, completed_at in np_transaction_records
         ]
     }
 
@@ -426,8 +443,11 @@ def request_np_billing(np_transaction_records):
         if resp.status_code >= 400:
             logger.error("NP請求確定依頼APIエラーレスポンス: status=%s, body=%s, payload=%s",
                          resp.status_code, resp.text, payload)
-        resp.raise_for_status()
+            return None
         result = resp.json()
+        if _np_response_has_errors(result):
+            logger.error("NP請求確定依頼APIが errors を返却: body=%s, payload=%s", result, payload)
+            return None
         logger.info("NP請求確定依頼完了: %d 件", len(np_transaction_records))
         return result
     except Exception:
@@ -468,6 +488,22 @@ def get_stale_pre_registered_transactions():
         logger.debug("DB 接続クローズ")
 
 
+def mark_cancelled(cur, external_transaction_ids):
+    """NP側でキャンセル済みの取引の settlement_status を 'cancelled' に更新する"""
+    if not external_transaction_ids:
+        return 0
+    cur.execute(
+        """
+        UPDATE transactions
+        SET settlement_status = 'cancelled', updated_at = NOW()
+        WHERE external_transaction_id = ANY(%s)
+          AND settlement_status = 'unsettled'
+        """,
+        (list(external_transaction_ids),),
+    )
+    return cur.rowcount
+
+
 def process_billing_and_cancellation():
     """l2_http_statusの更新後、請求確定/キャンセルを実行"""
     logger.info("=== 請求確定/キャンセル処理 開始 ===")
@@ -498,7 +534,8 @@ def process_billing_and_cancellation():
             # 1. 請求確定対象: l2_http_status=200 かつ 両方completed
             cur.execute(
                 """
-                SELECT DISTINCT external_transaction_id, created_at
+                SELECT DISTINCT external_transaction_id,
+                       COALESCE(completed_at, created_at) AS completed_at
                 FROM transactions
                 WHERE l2_http_status = '200'
                   AND consumer_exchange_status = 'completed'
@@ -511,8 +548,8 @@ def process_billing_and_cancellation():
 
             if billing_records:
                 logger.info("請求確定依頼対象: %d 件", len(billing_records))
-                for ext_id, created in billing_records:
-                    logger.info("  請求確定対象: ext_txn_id=%s, created=%s", ext_id, created)
+                for ext_id, completed in billing_records:
+                    logger.info("  請求確定対象: ext_txn_id=%s, completed_at=%s", ext_id, completed)
                 result = request_np_billing(billing_records)
                 if result is not None:
                     # 請求確定成功後、request_dateを更新して再請求を防止
@@ -531,7 +568,8 @@ def process_billing_and_cancellation():
             else:
                 logger.info("請求確定依頼対象: なし")
 
-            # 2. キャンセル対象: l2_http_status が 200以外（かつpending以外）
+            # 2. キャンセル対象: l2_http_status が 200以外（かつpending以外）で未精算のもの
+            #    （既に cancelled のものを毎回再キャンセル依頼しないよう settlement_status で絞る）
             cur.execute(
                 """
                 SELECT DISTINCT external_transaction_id
@@ -539,6 +577,7 @@ def process_billing_and_cancellation():
                 WHERE l2_http_status != 'pending'
                   AND l2_http_status != '200'
                   AND external_transaction_id IS NOT NULL
+                  AND settlement_status = 'unsettled'
                 """,
             )
             cancel_ids = [row[0] for row in cur.fetchall() if row[0]]
@@ -547,19 +586,15 @@ def process_billing_and_cancellation():
                 logger.info("取引キャンセル対象（L2ステータス異常）: %d 件", len(cancel_ids))
                 for cid in cancel_ids:
                     logger.info("  キャンセル対象: ext_txn_id=%s", cid)
-                cancel_np_transactions(cancel_ids)
-                # キャンセル済みのsettlement_statusを更新
-                cur.execute(
-                    """
-                    UPDATE transactions
-                    SET settlement_status = 'cancelled', updated_at = NOW()
-                    WHERE external_transaction_id = ANY(%s)
-                      AND settlement_status = 'unsettled'
-                    """,
-                    (cancel_ids,),
-                )
+                cancelled_ids = cancel_np_transactions(cancel_ids)
+                # NP側でキャンセルに成功した取引のみ settlement_status を更新
+                # （失敗分は 'unsettled' のまま残し次回 cron で再試行）
+                updated = mark_cancelled(cur, cancelled_ids)
                 conn.commit()
-                logger.info("settlement_status を 'cancelled' に更新（L2異常）: %d 件", cur.rowcount)
+                logger.info(
+                    "settlement_status を 'cancelled' に更新（L2異常）: %d 件 (キャンセル失敗 %d 件)",
+                    updated, len(cancel_ids) - len(cancelled_ids),
+                )
             else:
                 logger.info("取引キャンセル対象（L2ステータス異常）: なし")
 
@@ -573,22 +608,17 @@ def process_billing_and_cancellation():
         logger.info("取引キャンセル対象（24時間経過・未完了）: %d 件", len(stale_ids))
         for sid in stale_ids:
             logger.info("  キャンセル対象（stale）: ext_txn_id=%s", sid)
-        cancel_np_transactions(stale_ids)
-        # キャンセル済みのsettlement_statusを更新
+        cancelled_ids = cancel_np_transactions(stale_ids)
+        # NP側でキャンセルに成功した取引のみ settlement_status を更新
         conn = get_db_connection()
         try:
             with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    UPDATE transactions
-                    SET settlement_status = 'cancelled', updated_at = NOW()
-                    WHERE external_transaction_id = ANY(%s)
-                      AND settlement_status = 'unsettled'
-                    """,
-                    (stale_ids,),
-                )
+                updated = mark_cancelled(cur, cancelled_ids)
             conn.commit()
-            logger.info("settlement_status を 'cancelled' に更新（24時間経過）: %d 件", cur.rowcount)
+            logger.info(
+                "settlement_status を 'cancelled' に更新（24時間経過）: %d 件 (キャンセル失敗 %d 件)",
+                updated, len(stale_ids) - len(cancelled_ids),
+            )
         except Exception:
             conn.rollback()
             logger.exception("settlement_status の更新中にエラーが発生（stale）")
