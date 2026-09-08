@@ -615,6 +615,7 @@ class ConsumerTransactionItem(BaseModel):
     request_date: Optional[datetime] = Field(None, description="請求日")
     payment_deadline: Optional[datetime] = Field(None, description="支払期限")
     paid_at: Optional[datetime] = Field(None, description="支払完了日時")
+    completed_at: Optional[datetime] = Field(None, description="データ交換完了日時")
     created_at: datetime = Field(..., description="登録日時")
     updated_at: datetime = Field(..., description="更新日時")
 

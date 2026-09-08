@@ -93,7 +93,7 @@ class PaymentBillingService:
                 provider_id=first_trans.provider_id,
                 consumer_id=first_trans.consumer_id,
                 data_id_list=data_id_list,
-                completed_at=first_trans.created_at,
+                completed_at=max(t.completed_at_or_created_at for t in trans_list),
                 amount=float(amount),
                 tax_rate=float(first_trans.snapshot_tax_rate)
             )
@@ -170,7 +170,7 @@ class PaymentBillingService:
                 provider_id=first_trans.provider_id,
                 consumer_id=first_trans.consumer_id,
                 data_id_list=data_id_list,
-                completed_at=first_trans.created_at,
+                completed_at=max(t.completed_at_or_created_at for t in trans_list),
                 amount=float(amount),
                 tax_rate=float(first_trans.snapshot_tax_rate)
             )
@@ -240,6 +240,7 @@ class PaymentBillingService:
                 request_date=t.request_date,
                 payment_deadline=t.payment_deadline,
                 paid_at=t.paid_at,
+                completed_at=t.completed_at,
                 created_at=t.created_at,
                 updated_at=t.updated_at,
             )

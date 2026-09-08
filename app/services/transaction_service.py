@@ -759,6 +759,11 @@ class TransactionService:
                         )
                     if current_status == "pending":
                         setattr(record, target_column, new_status)
+                        if new_status == "completed":
+                            # 両当事者の完了日時のうち遅い方をデータ交換完了日時とする
+                            record.completed_at = max(
+                                filter(None, [record.completed_at, request.completed_at])
+                            )
                         self.transaction_repo.update(record)
 
                 self.db.commit()
@@ -883,7 +888,7 @@ class TransactionService:
                     consumer_exchange_status=consumer_status,
                     provider_exchange_status=provider_status,
                     l2_http_status="pending",
-                    created_at=request.completed_at
+                    completed_at=request.completed_at if exchange_status == "completed" else None,
                 )
 
                 self.transaction_repo.create(transaction)
@@ -1287,6 +1292,7 @@ class TransactionService:
                 for record in pre_registered:
                     record.consumer_exchange_status = "completed"
                     record.provider_exchange_status = "completed"
+                    record.completed_at = request.completed_at
                     self.transaction_repo.update(record)
 
                 self.db.flush()
@@ -1344,7 +1350,7 @@ class TransactionService:
                     consumer_exchange_status="completed",
                     provider_exchange_status="completed",
                     l2_http_status="pending",
-                    created_at=request.completed_at,
+                    completed_at=request.completed_at,
                 )
 
                 self.transaction_repo.create(transaction)

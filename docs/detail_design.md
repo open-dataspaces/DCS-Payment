@@ -719,6 +719,7 @@ CREATE INDEX ix_payment_user_consumer_provider ON payment_service_user_registrat
 | request_date | timestamptz | NULL | 請求日 |
 | payment_deadline | timestamptz | NULL, CHECK (>= request_date) | 支払期限 |
 | paid_at | timestamptz | NULL | 支払完了日時 |
+| completed_at | timestamptz | NULL, INDEX | データ交換完了日時（状態登録/確定APIの completed_at。支払/請求の期間判定・NP請求基準日に使用。未設定時は created_at で代替） |
 | external_data | jsonb | NULL | 外部決済サービス固有データ |
 | created_at | timestamptz | **NOT NULL**, DEFAULT now() | 登録日時 |
 | updated_at | timestamptz | **NOT NULL**, DEFAULT now() | 更新日時 |
@@ -762,6 +763,7 @@ CREATE TABLE IF NOT EXISTS transactions (
   request_date                 timestamptz NULL,
   payment_deadline             timestamptz NULL,
   paid_at                      timestamptz NULL,
+  completed_at                 timestamptz NULL,
   external_data                jsonb,
   created_at                   timestamptz NOT NULL DEFAULT now(),
   updated_at                   timestamptz NOT NULL DEFAULT now(),

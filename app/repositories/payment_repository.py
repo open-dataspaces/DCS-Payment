@@ -572,8 +572,8 @@ class TransactionRepository:
             self.db.query(Transaction)
             .filter(
                 Transaction.provider_id == provider_id,
-                Transaction.created_at >= datetime.combine(start_date, datetime.min.time()),
-                Transaction.created_at <= datetime.combine(end_date, datetime.max.time())
+                Transaction.effective_completed_at() >= datetime.combine(start_date, datetime.min.time()),
+                Transaction.effective_completed_at() <= datetime.combine(end_date, datetime.max.time())
             )
         )
 
@@ -618,8 +618,8 @@ class TransactionRepository:
             self.db.query(Transaction)
             .filter(
                 Transaction.consumer_id == consumer_id,
-                Transaction.created_at >= datetime.combine(start_date, datetime.min.time()),
-                Transaction.created_at <= datetime.combine(end_date, datetime.max.time())
+                Transaction.effective_completed_at() >= datetime.combine(start_date, datetime.min.time()),
+                Transaction.effective_completed_at() <= datetime.combine(end_date, datetime.max.time())
             )
         )
 
@@ -667,8 +667,8 @@ class TransactionRepository:
             .filter(
                 Transaction.consumer_id == consumer_id,
                 Transaction.provider_id == provider_id,
-                Transaction.created_at >= datetime.combine(start_date, datetime.min.time()),
-                Transaction.created_at <= datetime.combine(end_date, datetime.max.time())
+                Transaction.effective_completed_at() >= datetime.combine(start_date, datetime.min.time()),
+                Transaction.effective_completed_at() <= datetime.combine(end_date, datetime.max.time())
             )
         )
 
@@ -716,8 +716,8 @@ class TransactionRepository:
             .filter(
                 Transaction.consumer_id == consumer_id,
                 Transaction.provider_id == provider_id,
-                Transaction.created_at >= datetime.combine(start_date, datetime.min.time()),
-                Transaction.created_at <= datetime.combine(end_date, datetime.max.time()),
+                Transaction.effective_completed_at() >= datetime.combine(start_date, datetime.min.time()),
+                Transaction.effective_completed_at() <= datetime.combine(end_date, datetime.max.time()),
                 Transaction.settlement_status == settlement_status,
             )
             .all()

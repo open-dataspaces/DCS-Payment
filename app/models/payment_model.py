@@ -645,6 +645,12 @@ class Transaction(Base):
         index=True,
         comment="外部精算決済状態(settled/unsettled/cancelled)"
     )
+    completed_at = Column(
+        DateTime(timezone=True),
+        nullable=True,
+        index=True,
+        comment="データ交換完了日時（状態登録/確定APIで受け取った completed_at。支払/請求の期間判定に使用）"
+    )
     order_details = Column(
         Text,
         nullable=True,
@@ -735,6 +741,15 @@ class Transaction(Base):
         "PaymentServiceUserRegistration",
         back_populates="transactions"
     )
+
+    @classmethod
+    def effective_completed_at(cls):
+        """期間判定用のデータ交換完了日時（completed_at 未設定の既存行は created_at）"""
+        return func.coalesce(cls.completed_at, cls.created_at)
+
+    @property
+    def completed_at_or_created_at(self):
+        return self.completed_at or self.created_at
 
     def __repr__(self):
         return (
