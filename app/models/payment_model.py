@@ -22,7 +22,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.dialects.postgresql import JSONB, UUID as PG_UUID
 from sqlalchemy.orm import relationship
-from sqlalchemy.sql import func
+from sqlalchemy.sql import func, text
 
 from app.models.base import Base
 
@@ -714,6 +714,15 @@ class Transaction(Base):
         Index(
             "ix_transaction_request_date",
             "request_date"
+        ),
+        # 同一 tracking_id 配下で data_id は一意（利用料モデル無しは data_id=NULL を '' として扱う）
+        # 取引の二重紐付け・二重登録を DB で防ぐ
+        Index(
+            "uq_transaction_tracking_data",
+            "tracking_id",
+            text("COALESCE(data_id, '')"),
+            unique=True,
+            postgresql_where=text("tracking_id IS NOT NULL"),
         ),
     )
 

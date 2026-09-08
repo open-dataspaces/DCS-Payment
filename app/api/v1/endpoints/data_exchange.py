@@ -109,6 +109,26 @@ async def check_transaction_eligibility(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=str(e)
         )
+    except (ResourceConflictError, DuplicateRecordError) as e:
+        logger.warning(
+            "Request failed - resource conflict",
+            error=str(e),
+            status_code=409
+        )
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=str(e)
+        )
+    except BusinessRuleViolationError as e:
+        logger.warning(
+            "Request failed - business rule violation",
+            error=str(e),
+            status_code=400
+        )
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e)
+        )
     except DatabaseError as e:
         logger.error(
             "Request failed - database error",
@@ -477,6 +497,26 @@ async def check_transaction_eligibility_non_fee_model(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=str(e)
         )
+    except (ResourceConflictError, DuplicateRecordError) as e:
+        logger.warning(
+            "Request failed - resource conflict",
+            error=str(e),
+            status_code=409
+        )
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=str(e)
+        )
+    except BusinessRuleViolationError as e:
+        logger.warning(
+            "Request failed - business rule violation",
+            error=str(e),
+            status_code=400
+        )
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e)
+        )
     except DatabaseError as e:
         logger.error(
             "Request failed - database error",
@@ -564,6 +604,36 @@ async def confirm_data_exchange(
 
         return result
 
+    except RecordNotFoundError as e:
+        logger.warning(
+            "Request failed - resource not found",
+            error=str(e),
+            status_code=404
+        )
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(e)
+        )
+    except (ResourceConflictError, DuplicateRecordError) as e:
+        logger.warning(
+            "Request failed - resource conflict",
+            error=str(e),
+            status_code=409
+        )
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=str(e)
+        )
+    except BusinessRuleViolationError as e:
+        logger.warning(
+            "Request failed - business rule violation",
+            error=str(e),
+            status_code=400
+        )
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e)
+        )
     except PaymentClientError as e:
         logger.error(
             "Request failed - external payment service error",

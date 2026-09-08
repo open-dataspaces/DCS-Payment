@@ -767,51 +767,6 @@ class TransactionRepository:
         
         return transactions
 
-    @wrap_database_error
-    def get_by_identifiers_without_tracking_id(
-        self,
-        provider_id: str,
-        consumer_id: str,
-        data_id_list: List[Optional[str]],
-    ) -> List[Transaction]:
-        """provider_id + consumer_id + data_id + tracking_id IS NULL で
-        事前登録されたTransactionレコードを検索する。
-
-        Args:
-            provider_id: データ提供者ID
-            consumer_id: データ利用者ID
-            data_id_list: データIDリスト（NULLの場合はdata_id IS NULLで検索）
-        """
-        logger.debug(
-            "Searching pre-registered transactions (tracking_id=NULL)",
-            provider_id=provider_id,
-            consumer_id=consumer_id,
-            data_id_list=data_id_list,
-        )
-
-        query = (
-            self.db.query(Transaction)
-            .filter(
-                Transaction.provider_id == provider_id,
-                Transaction.consumer_id == consumer_id,
-                Transaction.tracking_id.is_(None),
-            )
-        )
-
-        if data_id_list and data_id_list[0] is not None:
-            query = query.filter(Transaction.data_id.in_(data_id_list))
-        else:
-            query = query.filter(Transaction.data_id.is_(None))
-
-        transactions = query.all()
-
-        logger.debug(
-            "Pre-registered transactions found",
-            count=len(transactions),
-        )
-
-        return transactions
-
 
 class PaymentServiceRepository:
     """決済サービスのリポジトリ"""

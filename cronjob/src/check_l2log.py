@@ -74,6 +74,10 @@ def get_tracking_ids(start_date, end_date):
                   AND created_at < %s
                   AND tracking_id IS NOT NULL
                   AND l2_http_status = 'pending'
+                  -- 取引可否APIで事前登録しただけ（両当事者とも未報告）の行は
+                  -- データ交換が未実施のため L2 ログ突合の対象外
+                  AND NOT (consumer_exchange_status = 'pending'
+                           AND provider_exchange_status = 'pending')
                 """,
                 (
                     datetime.combine(start_date, datetime.min.time()),
@@ -432,9 +436,12 @@ def request_np_billing(np_transaction_records):
 
 
 def get_stale_pre_registered_transactions():
-    """tracking_idがNULLのまま24時間経過したレコードを取得
-    （exchange_statusが両方completedでないもの）"""
-    logger.info("tracking_id=NULL の未完了レコードを取得中")
+    """取引可否APIで事前登録されたまま24時間経過したレコードの外部取引IDを取得
+
+    事前登録行は tracking_id 付きで保存されるため、「両当事者ともデータ交換状態が
+    pending のまま（=データ交換が報告されていない）」かつ未精算のものを対象にする。
+    """
+    logger.info("事前登録のまま24時間経過した未完了レコードを取得中")
 
     conn = get_db_connection()
     try:
@@ -443,17 +450,17 @@ def get_stale_pre_registered_transactions():
                 """
                 SELECT DISTINCT external_transaction_id
                 FROM transactions
-                WHERE tracking_id IS NULL
-                  AND external_transaction_id IS NOT NULL
+                WHERE external_transaction_id IS NOT NULL
+                  AND settlement_status = 'unsettled'
+                  AND consumer_exchange_status = 'pending'
+                  AND provider_exchange_status = 'pending'
                   AND created_at < NOW() - INTERVAL '24 hours'
-                  AND NOT (consumer_exchange_status = 'completed'
-                           AND provider_exchange_status = 'completed')
                 """,
             )
             rows = cur.fetchall()
             np_transaction_ids = [row[0] for row in rows if row[0]]
             logger.info(
-                "tracking_id=NULL の未完了レコード: %d 件", len(np_transaction_ids)
+                "事前登録のまま24時間経過した未完了レコード: %d 件", len(np_transaction_ids)
             )
             return np_transaction_ids
     finally:

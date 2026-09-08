@@ -493,6 +493,11 @@ class TransactionEligibilityRequest(BaseModel):
 class TransactionEligibilityResponse(BaseModel):
     status: TransactionEligibility = Field(..., description="取引可否(allowed:取引可, denied:取引不可)")
     detail: str = Field(..., description="処理成否詳細")
+    tracking_id: Optional[str] = Field(
+        None,
+        description="このデータ交換を識別するトラッキングID（X-TrackingId）。"
+                    "データ交換状態登録API では同じ値を tracking_id に指定すること"
+    )
 
 # --------------------------------------------------------------------
 # 利用料モデルなし
@@ -520,8 +525,18 @@ class TransactionEligibilityNonFeeModelRequest(BaseModel):
 class TransactionEligibilityNonFeeModelResponse(BaseModel):
     status: TransactionEligibility = Field(..., description="取引可否(allowed:取引可, denied:取引不可)")
     detail: str = Field(..., description="処理成否詳細")
+    tracking_id: Optional[str] = Field(
+        None,
+        description="このデータ交換を識別するトラッキングID（X-TrackingId）。"
+                    "取引金額確定API では同じ値を tracking_id（本文または X-TrackingId）に指定すること"
+    )
 
 class DataExchangeNonFeeModelRequest(BaseModel):
+    tracking_id: Optional[str] = Field(
+        None,
+        description="取引可否確認API（利用料モデルなし）が返したトラッキングID（UUID）。"
+                    "省略時は X-TrackingId ヘッダの値を使用する"
+    )
     provider_id: str = Field(..., description="データ提供者ID(外部システムにて発行)", min_length=1, max_length=255)
     consumer_id: str = Field(..., description="データ利用者ID(外部システムにて発行)", min_length=1, max_length=255)
     payment_service_id: UUID = Field(..., description="決済サービスID")
@@ -529,6 +544,16 @@ class DataExchangeNonFeeModelRequest(BaseModel):
     tax_rate: Decimal = Field(..., description="税率", decimal_places=4, ge=0, le=1)
     completed_at: datetime = Field(..., description="データ交換処理完了日時（ISO8601）")
     amount: RequestAmount = Field(..., description="支払い予定額")
+
+    @field_validator('tracking_id')
+    @classmethod
+    def validate_tracking_id_format(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return v
+        try:
+            return str(UUID(v))
+        except ValueError:
+            raise ValueError('tracking_id must be a valid UUID')
 
     @model_validator(mode='after')
     def validate_taxed_amount_range(self):

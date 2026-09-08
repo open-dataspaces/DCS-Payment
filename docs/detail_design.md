@@ -218,6 +218,14 @@ end
 
 ```
 
+
+> **トラッキングIDの取り扱い（取引可否確認と状態登録の紐付け）**
+>
+> - 取引可否確認API は与信OK時に、リクエストヘッダ `X-TrackingId` の値を `transactions.tracking_id` として取引を事前登録し、レスポンスの `tracking_id` にも同じ値を返す。
+> - データ交換状態登録API（POST /api/v1/data-exchange/status）は本文の `tracking_id` で事前登録行を特定する。**取引可否確認時の `X-TrackingId` と同じ値を指定すること**（provider_id / consumer_id / data_id での曖昧な紐付けは行わない）。
+> - 利用料モデルなしの取引金額確定API（POST /api/v1/data-exchange/non-fee-model/confirm）も同様に、本文の `tracking_id`（省略時は `X-TrackingId`）で事前登録行を特定する。
+> - 同一 `tracking_id` 配下で `data_id` は一意（DB の一意インデックス `uq_transaction_tracking_data`）。取引可否確認API を同じ `tracking_id` で再送した場合、同一内容なら再登録せず `allowed` を返す。
+
 ### (3) 購入確定処理シーケンス
 
 - L2ログは精算決済側ログ格納場所に、定期的に格納されていることが前提
