@@ -393,6 +393,7 @@ end
 | メソッド   | パス                                 | 説明                      |
 | ------ | ---------------------------------- | ----------------------- |
 | GET    | `/api/v1/fee-model`             | 利用料モデル一覧取得 |
+| GET    | `/api/v1/fee-model/{fee_model_id}`             | 利用料モデル取得 |
 | POST    | `/api/v1/fee-model`             | 利用料モデル登録 |
 | PUT    | `/api/v1/fee-model/{fee_model_id}`             | 利用料モデル変更 |
 | DELETE | `/api/v1/fee-model/{fee_model_id}`             | 利用料モデル削除 |

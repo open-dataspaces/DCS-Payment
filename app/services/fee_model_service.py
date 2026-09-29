@@ -198,6 +198,20 @@ class FeeModelService:
 
         )
 
+    def get_fee_model(self, fee_model_id: UUID) -> FeeModelResponse:
+        """利用料モデルを1件取得"""
+        logger.debug("Getting fee model", fee_model_id=str(fee_model_id))
+
+        fee_model = self.fee_model_repo.get_by_id_or_raise(fee_model_id)
+
+        logger.info(
+            "Fee model retrieved successfully",
+            fee_model_id=str(fee_model_id),
+            version=fee_model.version
+        )
+
+        return FeeModelResponse.model_validate(fee_model)
+
     def update_fee_model(
         self,
         fee_model_id: UUID,
