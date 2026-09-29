@@ -1,7 +1,7 @@
 from pydantic import AfterValidator, BaseModel, Field, ConfigDict, field_validator, model_validator
 from enum import Enum
 from typing import Annotated, List, Optional, Any, Dict
-from datetime import datetime, date
+from datetime import datetime, date, timezone
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from uuid import UUID
 
@@ -10,6 +10,19 @@ from app.utils.money import MAX_AMOUNT, to_decimal, validate_amount_range
 # ========================================
 # 定義
 # ========================================
+
+def _assume_utc_if_naive(v: datetime) -> datetime:
+    """タイムゾーンなしの日時は UTC とみなす
+
+    DB（timestamptz）や既存データとの比較で aware / naive が混在すると TypeError になるため、
+    リクエストの日時は必ず aware にそろえる。従来も naive の値は DB セッションの
+    タイムゾーン（UTC）として保存されていたため、それに合わせる。
+    """
+    return v.replace(tzinfo=timezone.utc) if v.tzinfo is None else v
+
+
+# リクエストで受け取る日時（タイムゾーン省略時は UTC）
+RequestDateTime = Annotated[datetime, AfterValidator(_assume_utc_if_naive)]
 
 
 def _amount_to_decimal(v: float) -> Decimal:
@@ -166,13 +179,13 @@ class FeeModelOptionalFields(BaseModel):
         description="保管先識別子(将来拡張用)", 
         max_length=255
     )
-    valid_to: Optional[datetime] = Field(None, description="有効終了日時(NULL=現在有効)")
+    valid_to: Optional[RequestDateTime] = Field(None, description="有効終了日時(NULL=現在有効)")
 
 
 class FeeModelClientManagedFields(BaseModel):
     """クライアントが管理可能なフィールド"""
 
-    valid_from: datetime = Field(..., description="有効開始日時")
+    valid_from: RequestDateTime = Field(..., description="有効開始日時")
     is_active: bool = Field(True, description="現在有効フラグ", strict=True)
     version: int = Field(1, description="バージョン番号", ge=1)
 
@@ -318,8 +331,8 @@ class FeeModelUpdateRequest(BaseModel):
         description="保管先識別子(将来拡張用)", 
         max_length=255
     )
-    valid_from: Optional[datetime] = Field(None, description="有効開始日時")
-    valid_to: Optional[datetime] = Field(None, description="有効終了日時(NULL=現在有効)")
+    valid_from: Optional[RequestDateTime] = Field(None, description="有効開始日時")
+    valid_to: Optional[RequestDateTime] = Field(None, description="有効終了日時(NULL=現在有効)")
     
     # クライアント管理フィールド（任意）
     is_active: Optional[bool] = Field(None, description="現在有効フラグ", strict=True)

@@ -8,6 +8,7 @@ from uuid import uuid4
 from datetime import datetime, timezone
 
 from sqlalchemy import (
+    event,
     Boolean,
     CheckConstraint,
     Column,
@@ -21,7 +22,7 @@ from sqlalchemy import (
     UniqueConstraint,
 )
 from sqlalchemy.dialects.postgresql import JSONB, UUID as PG_UUID
-from sqlalchemy.orm import relationship
+from sqlalchemy.orm import Session, relationship
 from sqlalchemy.sql import func, text
 
 from app.models.base import Base
@@ -187,9 +188,11 @@ class FeeModel(Base):
         comment="更新日時"
     )
 
-    # 楽観的ロック: UPDATE 時に WHERE version = <読込時の値> を付与し、
-    # 同時更新が起きた場合は StaleDataError となる（version は自動で +1 される）
-    __mapper_args__ = {"version_id_col": version}
+    # 楽観的ロック: UPDATE/DELETE 時に WHERE version = <読込時の値> を付与し、
+    # 同時更新が起きた場合は StaleDataError となる。
+    # 登録時はクライアントが指定した version をそのまま保存するため自動採番は使わず、
+    # 更新時の +1 は下の before_flush（_increment_fee_model_version）で行う
+    __mapper_args__ = {"version_id_col": version, "version_id_generator": False}
 
     # Constraints
     __table_args__ = (
@@ -257,6 +260,14 @@ class FeeModel(Base):
             f"version={self.version}, "
             f"is_active={self.is_active})>"
         )
+
+
+@event.listens_for(Session, "before_flush")
+def _increment_fee_model_version(session, flush_context, instances):
+    """変更された利用料モデルを UPDATE するときに version を +1 する（どの更新経路でも同じ）"""
+    for obj in session.dirty:
+        if isinstance(obj, FeeModel) and session.is_modified(obj, include_collections=False):
+            obj.version = obj.version + 1
 
 
 class FeeModelHistory(Base):
@@ -397,9 +408,12 @@ class FeeModelHistory(Base):
         "FeeModel",
         back_populates="history_records"
     )
+    # 履歴の削除時に ORM が取引の fee_model_history_id を NULL に書き換えないようにする
+    # （DB の ON DELETE RESTRICT で、取引から参照されている履歴の削除を拒否させる）
     transactions = relationship(
         "Transaction",
-        back_populates="fee_model_history"
+        back_populates="fee_model_history",
+        passive_deletes="all",
     )
 
     def __repr__(self):

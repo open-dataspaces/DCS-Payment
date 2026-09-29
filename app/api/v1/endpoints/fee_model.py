@@ -1,7 +1,6 @@
 import hashlib
 from datetime import timezone
-from email.utils import format_datetime, formatdate
-from time import mktime
+from email.utils import format_datetime
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
@@ -48,6 +47,7 @@ router = APIRouter()
         status.HTTP_400_BAD_REQUEST: {"description": "パラメータエラー", "model": ErrorResponse},
         status.HTTP_401_UNAUTHORIZED: {"description": "認証エラー", "model": ErrorResponse},
         status.HTTP_403_FORBIDDEN: {"description": "認可エラー", "model": ErrorResponse},
+        status.HTTP_404_NOT_FOUND: {"description": "決済サービスが未登録", "model": ErrorResponse},
         status.HTTP_409_CONFLICT: {"description": "リソース競合エラー", "model": ErrorResponse},
         status.HTTP_500_INTERNAL_SERVER_ERROR: {"description": "サーバエラー", "model": ErrorResponse},
     }
@@ -190,12 +190,10 @@ async def list_fee_models(
 
         # ETag/Last-Modified ヘッダを設定
         if result.models:
-            # Last-Modified: 最新のupdated_atを使用
+            # Last-Modified: 最新のupdated_atを使用（サーバのタイムゾーンによらず GMT で表す）
             latest_updated = max(m.updated_at for m in result.models)
-            response.headers["Last-Modified"] = formatdate(
-                timeval=mktime(latest_updated.timetuple()),
-                localtime=False,
-                usegmt=True
+            response.headers["Last-Modified"] = format_datetime(
+                latest_updated.astimezone(timezone.utc), usegmt=True
             )
             # ETag: fee_model_idリストとupdated_atのハッシュ
             etag_source = "|".join(
@@ -527,6 +525,18 @@ async def delete_fee_model(
         )
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(e)
+        )
+    except (OptimisticLockError, ResourceConflictError) as e:
+        # 取引から参照されている、または削除中に他のリクエストが更新した
+        logger.warning(
+            "Request failed - resource conflict",
+            fee_model_id=str(uuid_id),
+            error=str(e),
+            status_code=409
+        )
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
             detail=str(e)
         )
     except DatabaseError as e:

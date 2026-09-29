@@ -197,39 +197,43 @@ class FeeModelRepository:
 
     @wrap_database_error
     def update(self, fee_model: FeeModel) -> FeeModel:
-        """利用料モデルを更新"""
+        """利用料モデルを更新（変更がある場合は flush 時に version が +1 される）"""
+        # rollback 後はオブジェクトの属性が失効し、削除済みの行を読み直すと例外になるため先に控える
+        fee_model_id = fee_model.fee_model_id
         expected_version = fee_model.version
         logger.debug(
             "Updating fee model",
-            fee_model_id=str(fee_model.fee_model_id),
+            fee_model_id=str(fee_model_id),
             version=expected_version
         )
 
         try:
             self.db.flush()
         except StaleDataError:
-            # version_id_col による楽観的ロック失敗（他のトランザクションが先に更新済み）
+            # version_id_col による楽観的ロック失敗（他のトランザクションが先に更新・削除済み）
             self.db.rollback()
             actual_version = (
                 self.db.query(FeeModel.version)
-                .filter(FeeModel.fee_model_id == fee_model.fee_model_id)
+                .filter(FeeModel.fee_model_id == fee_model_id)
                 .scalar()
             )
             logger.warning(
                 "Optimistic lock failed - fee model was modified concurrently",
-                fee_model_id=str(fee_model.fee_model_id),
+                fee_model_id=str(fee_model_id),
                 expected_version=expected_version,
                 actual_version=actual_version,
             )
+            if actual_version is None:
+                raise RecordNotFoundError(entity="Fee model", identifier=fee_model_id)
             raise OptimisticLockError(
                 entity="fee_model",
                 expected_version=expected_version,
-                actual_version=actual_version if actual_version is not None else -1,
+                actual_version=actual_version,
             )
 
         logger.info(
             "Fee model updated successfully",
-            fee_model_id=str(fee_model.fee_model_id),
+            fee_model_id=str(fee_model_id),
             fee_model_name=fee_model.fee_model_name,
             version=fee_model.version
         )
@@ -239,18 +243,37 @@ class FeeModelRepository:
     @wrap_database_error
     def delete(self, fee_model: FeeModel) -> None:
         """利用料モデルを削除"""
+        # rollback 後はオブジェクトの属性が失効し、削除済みの行を読み直すと例外になるため先に控える
+        fee_model_id = fee_model.fee_model_id
         logger.info(
             "Deleting fee model",
-            fee_model_id=str(fee_model.fee_model_id),
+            fee_model_id=str(fee_model_id),
             fee_model_name=fee_model.fee_model_name
         )
         
-        self.db.delete(fee_model)
-        self.db.flush()
+        expected_version = fee_model.version
+        try:
+            self.db.delete(fee_model)
+            self.db.flush()
+        except StaleDataError:
+            # 読込後に他のトランザクションが更新・削除した（version_id_col による楽観的ロック失敗）
+            self.db.rollback()
+            actual_version = (
+                self.db.query(FeeModel.version)
+                .filter(FeeModel.fee_model_id == fee_model_id)
+                .scalar()
+            )
+            if actual_version is None:
+                raise RecordNotFoundError(entity="Fee model", identifier=fee_model_id)
+            raise OptimisticLockError(
+                entity="fee_model",
+                expected_version=expected_version,
+                actual_version=actual_version,
+            )
         
         logger.info(
             "Fee model deleted successfully",
-            fee_model_id=str(fee_model.fee_model_id)
+            fee_model_id=str(fee_model_id)
         )
 
     @wrap_database_error
@@ -292,6 +315,16 @@ class FeeModelRepository:
 
 class FeeModelHistoryRepository:
     """利用料モデル履歴のリポジトリ"""
+
+    @wrap_database_error
+    def is_referenced_by_transactions(self, fee_model_id: UUID) -> bool:
+        """利用料モデルの履歴（価格スナップショット）を参照している取引があるか"""
+        return (
+            self.db.query(Transaction.transaction_id)
+            .join(FeeModelHistory, Transaction.fee_model_history_id == FeeModelHistory.fee_model_history_id)
+            .filter(FeeModelHistory.fee_model_id == fee_model_id)
+            .first()
+        ) is not None
 
     def __init__(self, db: Session):
         self.db = db
