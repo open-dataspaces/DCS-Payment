@@ -1,7 +1,7 @@
 """Common Dependencies"""
+import hmac
 import re
 from uuid import UUID, uuid4
-from typing import Literal
 from fastapi import Depends, HTTPException, status, Header
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 
@@ -95,7 +95,10 @@ async def verify_request_headers(
     # title を明示しないと OpenAPI 上で "X-Trackingid" / "X-Payment-Api-Key" と表記されるため指定する。
     x_tracking_id: str = Header(..., alias="X-TrackingId", title="X-TrackingId"),
     accept_language: str = Header(default="ja-JP", alias="Accept-Language"),
-    content_type: Literal["application/json"] = Header(..., alias="Content-Type"),
+    # charset などのパラメータ付き（application/json; charset=utf-8）も受け付ける（ContentTypeMiddleware と同じ）
+    content_type: str = Header(
+        ..., alias="Content-Type", pattern=r"(?i)^application/json\s*(;.*)?$"
+    ),
     x_payment_api_key: str = Header(..., alias="X-Payment-API-Key", title="X-Payment-API-Key")
 ):
     
@@ -112,7 +115,17 @@ async def verify_request_headers(
     """
     X-Payment-API-KeyヘッダーのAPIキーの検証をする
     """
-    if x_payment_api_key != settings.X_PAYMENT_API_KEY:
+    if not settings.X_PAYMENT_API_KEY:
+        # サーバ側の API キーが未設定の場合は、空のキーで通過させない（fail-closed）
+        logger.error(
+            "X_PAYMENT_API_KEY is not configured - rejecting request",
+            extra={"tracking_id": validated_tracking_id}
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Invalid API key"
+        )
+    if not hmac.compare_digest(x_payment_api_key.encode(), settings.X_PAYMENT_API_KEY.encode()):
         logger.warning(
             "Invalid API key provided",
             extra={"tracking_id": validated_tracking_id }
@@ -155,7 +168,8 @@ def verify_operator_id(request_id: str, credential: dict, id_type: str) -> None:
     if request_id != operator_id:
         logger.warning(
             f"{id_type} mismatch with operator ID",
-            request_id=request_id,
+            # request_id はログの予約フィールド（X-TrackingId）のため別名にする
+            requested_id=request_id,
             operator_id=operator_id,
         )
         raise HTTPException(

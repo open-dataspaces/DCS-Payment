@@ -147,7 +147,8 @@ docker compose up --build
 
 | 変数名 | デフォルト値 | 説明 |
 |---|---|---|
-| `X_PAYMENT_API_KEY` | `dev-payment-api-key` | API キー（リクエストヘッダ `X-Payment-API-Key` の値と照合） |
+| `X_PAYMENT_API_KEY` | `dev-payment-api-key` | API キー（リクエストヘッダ `X-Payment-API-Key` の値と照合）。未設定の場合はすべてのリクエストを拒否する |
+| `ALLOWED_HOSTS` | `http://localhost:3000` | CORS で許可するオリジン（カンマ区切り、または JSON 配列）。アプリ既定値は空（許可なし） |
 
 ### L3 認証設定
 

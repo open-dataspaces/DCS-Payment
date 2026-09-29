@@ -1,6 +1,9 @@
 """Application Configuration"""
-from typing import List, Literal
-from pydantic_settings import BaseSettings, SettingsConfigDict
+import json
+from typing import Annotated, List, Literal
+from urllib.parse import quote
+
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 from pydantic import computed_field, field_validator
 
 
@@ -103,7 +106,9 @@ class Settings(BaseSettings):
     # ===========================================
     # CORS (本番環境では具体的なオリジンを指定すること)
     # ===========================================
-    ALLOWED_HOSTS: List[str] = []
+    # 環境変数ではカンマ区切り（a,b）または JSON 配列（["a","b"]）で指定する
+    # （NoDecode: pydantic-settings に JSON として解釈させず、parse_allowed_hosts で解釈する）
+    ALLOWED_HOSTS: Annotated[List[str], NoDecode] = []
 
     @field_validator('SECRET_KEY')
     @classmethod
@@ -115,11 +120,14 @@ class Settings(BaseSettings):
     @field_validator('ALLOWED_HOSTS', mode='before')
     @classmethod
     def parse_allowed_hosts(cls, v):
-        """CORS_ORIGINSをパース（カンマ区切り文字列またはリスト）"""
+        """ALLOWED_HOSTS（CORS の許可オリジン）をパース（カンマ区切り文字列・JSON 配列・リスト）"""
         if isinstance(v, str):
+            v = v.strip()
             if not v:
                 return []
-            return [host.strip() for host in v.split(',')]
+            if v.startswith('['):
+                return json.loads(v)
+            return [host.strip() for host in v.split(',') if host.strip()]
         return v
     
     # ===========================================
@@ -143,14 +151,15 @@ class Settings(BaseSettings):
     def DATABASE_URL(self) -> str:
         """環境に応じたデータベースURLを返す"""
         if self.ENVIRONMENT == "DEVELOP":
+            # ユーザー名・パスワードは URL エンコードする（'@' や '%' を含む場合に URL が壊れないように）
             return (
-                f"postgresql://{self.DEV_POSTGRES_USER}:{self.DEV_POSTGRES_PASSWORD}"
+                f"postgresql://{quote(self.DEV_POSTGRES_USER, safe='')}:{quote(self.DEV_POSTGRES_PASSWORD, safe='')}"
                 f"@{self.DEV_POSTGRES_HOST}:{self.DEV_POSTGRES_PORT}/{self.DEV_POSTGRES_DB}"
             )
         else:
             # 本番環境ではSSL接続を推奨
             return (
-                f"postgresql://{self.POSTGRES_USER}:{self.POSTGRES_PASSWORD}"
+                f"postgresql://{quote(self.POSTGRES_USER, safe='')}:{quote(self.POSTGRES_PASSWORD, safe='')}"
                 f"@{self.POSTGRES_HOST}:{self.POSTGRES_PORT}/{self.POSTGRES_DB}"
             )
 
