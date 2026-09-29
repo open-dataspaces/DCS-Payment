@@ -18,6 +18,7 @@ class Settings(BaseSettings):
     # L3 ACCESS (環境変数から取得 - デフォルト値なし)
     L3_BASE_URL: str = ""
     L3_INTROSPECT_ENDPOINT: str = "/auth/token/introspect"
+    L3_AUTHZ_EVALUATION_ENDPOINT: str = "/authz/stores/{store_id}/access/v1/evaluation"
     L3_API_KEY: str = ""
     L3_CLIENT_ID: str = ""
     L3_CLIENT_SECRET: str = ""
@@ -59,12 +60,10 @@ class Settings(BaseSettings):
     OPERATOR_ID_VERIFICATION_ENABLED: bool = True
 
     # ===========================================
-    # 認可サービス設定
+    # 認可サービス設定（L3 の認可判定API（AuthZEN）を経由して認可確認する）
     # ===========================================
     AUTHZ_ENABLED: bool = False
-    AUTHZ_BASE_URL: str = ""
-    AUTHZ_OPENFGA_STORE_ID: str = ""
-    AUTHZ_OPENFGA_MODEL_ID: str = ""
+    AUTHZ_STORE_ID: str = ""  # 精算決済のAPI実行権限を登録した L3 の認可ストアID
 
     # ===========================================
     # L2 HTTPステータスフィルタ設定

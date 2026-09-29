@@ -184,14 +184,17 @@ def require_permission(endpoint_name: str, relation: str = "can_access"):
     async def check_permission(
         credential: dict = Depends(verify_access_token),
         headers: dict = Depends(verify_request_headers),
+        credentials: HTTPAuthorizationCredentials = Depends(security),
     ):
         operator_id = credential.get("token_info", {}).get("operator_id")
         tracking_id = headers.get("x_tracking_id")
 
         try:
+            # L3 の認可判定APIは、呼び出し元のアクセストークンで認証する
             await authz_client.check_or_raise(
                 operator_id=operator_id,
                 endpoint_name=endpoint_name,
+                access_token=credentials.credentials,
                 relation=relation,
                 tracking_id=tracking_id
             )

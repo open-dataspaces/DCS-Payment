@@ -49,8 +49,10 @@ opt 利用料モデル作成
   CORE_L2->>PAYMENT: POST /api/v1/fee-model<BR>(アクセストークン,利用料モデル名,利用料モデル情報)
   PAYMENT->>CORE_L3: アクセストークン検証
   CORE_L3-->>PAYMENT: OK
-  PAYMENT->>AUTHZ: 認可確認
-  AUTHZ-->>PAYMENT: 認可確認結果
+  PAYMENT->>CORE_L3: 認可判定 (AuthZEN Evaluation API: operator_id, 対象APIエンドポイント)
+  CORE_L3->>AUTHZ: 認可判定
+  AUTHZ-->>CORE_L3: 判定結果
+  CORE_L3-->>PAYMENT: 認可結果 (decision)
   PAYMENT->>PAYMENT_DB1: 利用料モデル登録(INSERT)
   PAYMENT_DB1-->>PAYMENT: 作成結果
   PAYMENT-->>CORE_L2: 201 Created<BR>(利用料モデルID,利用料モデル名,利用料モデル情報)
@@ -64,8 +66,10 @@ opt 利用料モデル更新
   CORE_L2->>PAYMENT: PUT /api/v1/fee-model/{利用料モデルID}<BR>(アクセストークン,利用料モデル名,利用料モデル情報)
   PAYMENT->>CORE_L3: アクセストークン検証
   CORE_L3-->>PAYMENT: OK
-  PAYMENT->>AUTHZ: 認可確認
-  AUTHZ-->>PAYMENT: 認可確認結果
+  PAYMENT->>CORE_L3: 認可判定 (AuthZEN Evaluation API: operator_id, 対象APIエンドポイント)
+  CORE_L3->>AUTHZ: 認可判定
+  AUTHZ-->>CORE_L3: 判定結果
+  CORE_L3-->>PAYMENT: 認可結果 (decision)
   PAYMENT->>PAYMENT_DB1: 利用料モデル更新(UPDATE)
   PAYMENT_DB1-->>PAYMENT: 更新結果
   PAYMENT-->>CORE_L2: 200 OK<BR>(利用料モデルID,利用料モデル名,利用料モデル情報)
@@ -79,8 +83,10 @@ opt 利用料モデル取得
   CORE_L2->>PAYMENT: GET /api/v1/fee-model/{利用料モデルID}<BR>(アクセストークン)
   PAYMENT->>CORE_L3: アクセストークン検証
   CORE_L3-->>PAYMENT: OK
-  PAYMENT->>AUTHZ: 認可確認
-  AUTHZ-->>PAYMENT: 認可確認結果
+  PAYMENT->>CORE_L3: 認可判定 (AuthZEN Evaluation API: operator_id, 対象APIエンドポイント)
+  CORE_L3->>AUTHZ: 認可判定
+  AUTHZ-->>CORE_L3: 判定結果
+  CORE_L3-->>PAYMENT: 認可結果 (decision)
   PAYMENT->>PAYMENT_DB1: 指定したIDの利用料モデルを取得(SELECT)
   PAYMENT_DB1-->>PAYMENT: 指定した利用料モデル情報
   PAYMENT-->>CORE_L2: 200 OK<BR>(利用料モデルID,利用料モデル名,利用料モデル情報)
@@ -94,8 +100,10 @@ opt 利用料モデル削除
   CORE_L2->>PAYMENT: DELETE /api/v1/fee-model/{利用料モデルID}<BR>(アクセストークン)
   PAYMENT->>CORE_L3: アクセストークン検証
   CORE_L3-->>PAYMENT: OK
-  PAYMENT->>AUTHZ: 認可確認
-  AUTHZ-->>PAYMENT: 認可確認結果
+  PAYMENT->>CORE_L3: 認可判定 (AuthZEN Evaluation API: operator_id, 対象APIエンドポイント)
+  CORE_L3->>AUTHZ: 認可判定
+  AUTHZ-->>CORE_L3: 判定結果
+  CORE_L3-->>PAYMENT: 認可結果 (decision)
   PAYMENT->>PAYMENT_DB1: 指定した利用料モデルを削除(DELETE)
   PAYMENT_DB1-->>PAYMENT: 削除結果
   PAYMENT-->>CORE_L2: 204 No Content
@@ -109,8 +117,10 @@ opt 利用料モデル一覧取得
   CORE_L2->>PAYMENT: GET /api/v1/fee-model<BR>(アクセストークン)
   PAYMENT->>CORE_L3: アクセストークン検証
   CORE_L3-->>PAYMENT: OK
-  PAYMENT->>AUTHZ: 認可確認
-  AUTHZ-->>PAYMENT: 認可確認結果
+  PAYMENT->>CORE_L3: 認可判定 (AuthZEN Evaluation API: operator_id, 対象APIエンドポイント)
+  CORE_L3->>AUTHZ: 認可判定
+  AUTHZ-->>CORE_L3: 判定結果
+  CORE_L3-->>PAYMENT: 認可結果 (decision)
   PAYMENT->>PAYMENT_DB1: 利用料モデルを取得(SELECT)
   PAYMENT_DB1-->>PAYMENT: 利用料モデル一覧
   PAYMENT-->>CORE_L2: 200 OK<BR>(利用料モデルID,利用料モデル名,利用料モデル情報)
@@ -167,8 +177,10 @@ opt 取引可否確認
   PAYMENT->>CORE_L3: アクセストークン検証
   CORE_L3-->>PAYMENT: OK
   PAYMENT->>PAYMENT: アクセストークンからOperatorIDを取得
-  PAYMENT->>AUTHZ: 認可確認
-  AUTHZ-->>PAYMENT: 認可確認結果
+  PAYMENT->>CORE_L3: 認可判定 (AuthZEN Evaluation API: operator_id, 対象APIエンドポイント)
+  CORE_L3->>AUTHZ: 認可判定
+  AUTHZ-->>CORE_L3: 判定結果
+  CORE_L3-->>PAYMENT: 認可結果 (decision)
   PAYMENT->>PAYMENT_DUMMY: ユーザIDに紐づく取引可否情報を取得(SELECT)
   PAYMENT_DUMMY-->>PAYMENT: 取引可否情報
   PAYMENT-->>CORE_L2: 200 OK<BR>(取引可否)
@@ -194,8 +206,10 @@ opt データ交換登録(データ提供者)
   CORE_L2->>PAYMENT: データ交換情報登録 POST /api/v1/data-exchange/status <BR>(アクセストークン)
   PAYMENT->>CORE_L3: アクセストークン検証
   CORE_L3-->>PAYMENT: OK
-  PAYMENT->>AUTHZ: 認可確認
-  AUTHZ-->>PAYMENT: 認可確認結果
+  PAYMENT->>CORE_L3: 認可判定 (AuthZEN Evaluation API: operator_id, 対象APIエンドポイント)
+  CORE_L3->>AUTHZ: 認可判定
+  AUTHZ-->>CORE_L3: 判定結果
+  CORE_L3-->>PAYMENT: 認可結果 (decision)
   PAYMENT->>PAYMENT_DB1: 取引情報登録・更新(INSERT/UPDATE)
   PAYMENT_DB1-->>PAYMENT: 登録結果
   PAYMENT-->>CORE_L2: 200 OK
@@ -208,8 +222,10 @@ opt データ交換登録(データ消費者)
   CORE_L2->>PAYMENT: データ交換情報登録 POST /api/v1/data-exchange/status<BR>(アクセストークン)
   PAYMENT->>CORE_L3: アクセストークン検証
   CORE_L3-->>PAYMENT: OK
-  PAYMENT->>AUTHZ: 認可確認
-  AUTHZ-->>PAYMENT: 認可確認結果
+  PAYMENT->>CORE_L3: 認可判定 (AuthZEN Evaluation API: operator_id, 対象APIエンドポイント)
+  CORE_L3->>AUTHZ: 認可判定
+  AUTHZ-->>CORE_L3: 判定結果
+  CORE_L3-->>PAYMENT: 認可結果 (decision)
   PAYMENT->>PAYMENT_DB1: 取引情報登録・更新(INSERT/UPDATE)
   PAYMENT_DB1-->>PAYMENT: 登録結果
   PAYMENT-->>CORE_L2: 200 OK
@@ -324,8 +340,10 @@ CORE_L2->>PAYMENT:　POST /api/v1/billing<BR>(アクセストークン)
 PAYMENT->>CORE_L3: アクセストークン検証/権限確認
 CORE_L3-->>PAYMENT: OK
 PAYMENT->>PAYMENT: アクセストークンからOperatorIDを取得
-PAYMENT->>AUTHZ: 認可確認
-AUTHZ-->>PAYMENT: 認可確認結果
+PAYMENT->>CORE_L3: 認可判定 (AuthZEN Evaluation API: operator_id, 対象APIエンドポイント)
+CORE_L3->>AUTHZ: 認可判定
+AUTHZ-->>CORE_L3: 判定結果
+CORE_L3-->>PAYMENT: 認可結果 (decision)
 PAYMENT->>PAYMENT_DB: 請求情報取得
 PAYMENT_DB-->>PAYMENT: 請求情報
 PAYMENT-->>CORE_L2: 200 OK
@@ -343,8 +361,10 @@ CORE_L2->>PAYMENT:　POST /api/v1/payment<BR>(アクセストークン)
 PAYMENT->>CORE_L3: アクセストークン検証/権限確認
 CORE_L3-->>PAYMENT: OK
 PAYMENT->>PAYMENT: アクセストークンからOperatorIDを取得
-PAYMENT->>AUTHZ: 認可確認
-AUTHZ-->>PAYMENT: 認可確認結果
+PAYMENT->>CORE_L3: 認可判定 (AuthZEN Evaluation API: operator_id, 対象APIエンドポイント)
+CORE_L3->>AUTHZ: 認可判定
+AUTHZ-->>CORE_L3: 判定結果
+CORE_L3-->>PAYMENT: 認可結果 (decision)
 PAYMENT->>PAYMENT_DB: 支払情報取得
 PAYMENT_DB-->>PAYMENT: 支払情報
 PAYMENT-->>CORE_L2: 200 OK
@@ -400,8 +420,10 @@ CORE_L2->>PAYMENT: POST /api/v1/data-exchange/settlement/transactions<BR>(アク
 PAYMENT->>CORE_L3: アクセストークン検証
 CORE_L3-->>PAYMENT: OK
 PAYMENT->>PAYMENT: アクセストークンからOperatorIDを取得(provider_id)
-PAYMENT->>AUTHZ: 認可確認
-AUTHZ-->>PAYMENT: 認可確認結果
+PAYMENT->>CORE_L3: 認可判定 (AuthZEN Evaluation API: operator_id, 対象APIエンドポイント)
+CORE_L3->>AUTHZ: 認可判定
+AUTHZ-->>CORE_L3: 判定結果
+CORE_L3-->>PAYMENT: 認可結果 (decision)
 PAYMENT->>PAYMENT_DB: トランザクション情報取得(SELECT)
 PAYMENT_DB-->>PAYMENT: トランザクション一覧
 PAYMENT-->>CORE_L2: 200 OK<BR>(transactions, total_count)
@@ -457,8 +479,10 @@ opt 取引可否確認（利用料モデルなし）
   PAYMENT->>CORE_L3: アクセストークン検証
   CORE_L3-->>PAYMENT: OK
   PAYMENT->>PAYMENT: アクセストークンからOperatorIDを取得
-  PAYMENT->>AUTHZ: 認可確認
-  AUTHZ-->>PAYMENT: 認可確認結果
+  PAYMENT->>CORE_L3: 認可判定 (AuthZEN Evaluation API: operator_id, 対象APIエンドポイント)
+  CORE_L3->>AUTHZ: 認可判定
+  AUTHZ-->>CORE_L3: 判定結果
+  CORE_L3-->>PAYMENT: 認可結果 (decision)
   PAYMENT->>PAYMENT_DUMMY: ユーザIDに紐づく取引可否情報を取得
   PAYMENT_DUMMY-->>PAYMENT: 取引可否情報
   PAYMENT-->>CORE_L2: 200 OK<BR>(取引可否,tracking_id)
@@ -472,8 +496,10 @@ opt データ交換取引金額確定（利用料モデルなし）
   CORE_L2->>PAYMENT: POST /api/v1/data-exchange/non-fee-model/confirm<BR>(アクセストークン,確定情報)
   PAYMENT->>CORE_L3: アクセストークン検証
   CORE_L3-->>PAYMENT: OK
-  PAYMENT->>AUTHZ: 認可確認
-  AUTHZ-->>PAYMENT: 認可確認結果
+  PAYMENT->>CORE_L3: 認可判定 (AuthZEN Evaluation API: operator_id, 対象APIエンドポイント)
+  CORE_L3->>AUTHZ: 認可判定
+  AUTHZ-->>CORE_L3: 判定結果
+  CORE_L3-->>PAYMENT: 認可結果 (decision)
   PAYMENT->>PAYMENT_DB1: 取引情報更新(UPDATE)
   PAYMENT_DB1-->>PAYMENT: 更新結果
   PAYMENT-->>CORE_L2: 200 OK<BR>(確定結果)

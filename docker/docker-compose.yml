@@ -56,12 +56,10 @@ services:
       L3_CLIENT_SECRET: ${L3_CLIENT_SECRET:-dev-client-secret}
 
       # ===========================================
-      # 認可サービス設定
+      # 認可サービス設定（L3 の認可判定APIを経由。L3_BASE_URL / L3_API_KEY を使用）
       # ===========================================
       AUTHZ_ENABLED: "false"
-      AUTHZ_BASE_URL: ${AUTHZ_BASE_URL:-http://openfga:8080}
-      AUTHZ_OPENFGA_STORE_ID: ${AUTHZ_OPENFGA_STORE_ID:-01KEVMH7G43TPP1BSMPWAFC405}
-      AUTHZ_OPENFGA_MODEL_ID: ${AUTHZ_OPENFGA_MODEL_ID:-01KEVMH7GK0BZCHAAEPZR0WDTM}
+      AUTHZ_STORE_ID: ${AUTHZ_STORE_ID:-01KEVMH7G43TPP1BSMPWAFC405}
 
       # ===========================================
       # 外部決済サービス設定

@@ -160,14 +160,15 @@ docker compose up --build
 | `L3_CLIENT_ID` | `dev-client-id` | L3 クライアント ID |
 | `L3_CLIENT_SECRET` | `dev-client-secret` | L3 クライアントシークレット |
 
-### 認可サービス設定（OpenFGA）(独自で構築する場合のみ)
+### 認可サービス設定（L3 認可判定API）
 
 | 変数名 | デフォルト値 | 説明 |
 |---|---|---|
 | `AUTHZ_ENABLED` | `false` | 認可チェック有効/無効 |
-| `AUTHZ_BASE_URL` | `http://openfga:8080` | OpenFGA サーバー URL |
-| `AUTHZ_OPENFGA_STORE_ID` | `01KEVMH7G43T...` | ストア ID |
-| `AUTHZ_OPENFGA_MODEL_ID` | `01KEVMH7GK0B...` | モデル ID |
+| `AUTHZ_STORE_ID` | `01KEVMH7G43T...` | 精算決済の API 実行権限を登録した L3 の認可ストア ID |
+| `L3_AUTHZ_EVALUATION_ENDPOINT` | `/authz/stores/{store_id}/access/v1/evaluation` | L3 の認可判定 API（AuthZEN）のパス |
+
+認可確認は L3 の認可判定 API を経由して行います（接続先・API キーは `L3_BASE_URL`・`L3_API_KEY` を使用）。`L3_API_KEY` のレルムが、`AUTHZ_STORE_ID` の認可ストアに紐付けられている必要があります。
 
 ### 外部決済サービス設定（NP掛け払いと連携する場合のみ使用)
 
