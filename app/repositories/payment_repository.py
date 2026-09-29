@@ -5,14 +5,16 @@ Repository Layer - データベースアクセス層
 SQLAlchemyの例外を独自の例外に変換して上位層に伝播
 """
 
-from datetime import date, datetime, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from typing import List, Optional, Tuple
 from uuid import UUID
 
+from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError as SQLIntegrityError
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.exc import StaleDataError
 
+from app.core.config import settings
 from app.core.custom_exceptions import (
     DuplicateRecordError,
     OptimisticLockError,
@@ -29,6 +31,17 @@ from app.models.payment_model import (
 )
 
 logger = get_logger(__name__)
+
+# 支払/請求の期間判定は JST の日付で行う（DB セッションのタイムゾーンに依存させない）
+JST = timezone(timedelta(hours=9))
+
+
+def _completed_in_period(start_date: date, end_date: date):
+    """データ交換完了日時が JST の start_date 0:00 以上、end_date の翌日 0:00 未満である条件"""
+    start = datetime.combine(start_date, time.min, tzinfo=JST)
+    end = datetime.combine(end_date + timedelta(days=1), time.min, tzinfo=JST)
+    completed_at = Transaction.effective_completed_at()
+    return completed_at >= start, completed_at < end
 
 
 class FeeModelRepository:
@@ -533,6 +546,13 @@ class TransactionRepository:
 
         query = self.db.query(Transaction).filter(Transaction.tracking_id == tracking_id)
         if for_update:
+            # ロック待ちの上限を設ける（このトランザクションの間だけ有効）。DB 呼び出しは同期のため
+            # 待っている間はイベントループが止まる。CronJob が NP 呼び出し中にロックを保持している
+            # 場合などに待ち続けないよう、超過時は LockTimeoutError（503・再送可）にする
+            self.db.execute(
+                text("SELECT set_config('lock_timeout', :timeout, true)"),
+                {"timeout": f"{settings.DB_LOCK_TIMEOUT}s"},
+            )
             # ロック順序を固定してデッドロックを避ける
             query = query.order_by(Transaction.transaction_id).with_for_update()
         transactions = query.all()
@@ -638,8 +658,7 @@ class TransactionRepository:
             self.db.query(Transaction)
             .filter(
                 Transaction.provider_id == provider_id,
-                Transaction.effective_completed_at() >= datetime.combine(start_date, datetime.min.time()),
-                Transaction.effective_completed_at() <= datetime.combine(end_date, datetime.max.time())
+                *_completed_in_period(start_date, end_date)
             )
         )
 
@@ -684,8 +703,7 @@ class TransactionRepository:
             self.db.query(Transaction)
             .filter(
                 Transaction.consumer_id == consumer_id,
-                Transaction.effective_completed_at() >= datetime.combine(start_date, datetime.min.time()),
-                Transaction.effective_completed_at() <= datetime.combine(end_date, datetime.max.time())
+                *_completed_in_period(start_date, end_date)
             )
         )
 
@@ -739,8 +757,7 @@ class TransactionRepository:
             .filter(
                 Transaction.consumer_id == consumer_id,
                 Transaction.provider_id == provider_id,
-                Transaction.effective_completed_at() >= datetime.combine(start_date, datetime.min.time()),
-                Transaction.effective_completed_at() <= datetime.combine(end_date, datetime.max.time())
+                *_completed_in_period(start_date, end_date)
             )
         )
 
@@ -790,8 +807,7 @@ class TransactionRepository:
             .filter(
                 Transaction.consumer_id == consumer_id,
                 Transaction.provider_id == provider_id,
-                Transaction.effective_completed_at() >= datetime.combine(start_date, datetime.min.time()),
-                Transaction.effective_completed_at() <= datetime.combine(end_date, datetime.max.time()),
+                *_completed_in_period(start_date, end_date),
                 Transaction.settlement_status == settlement_status,
             )
             .all()

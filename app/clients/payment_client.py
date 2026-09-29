@@ -1,6 +1,6 @@
 """External Payment Service Client"""
 import base64
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any, Optional
 from urllib.parse import urlparse
@@ -497,6 +497,12 @@ class PaymentClient:
         raise PaymentClientError(f"Billing request not supported for: {payment_service_id}")
 
 
+def _raise_if_np_errors(body: Any, api_name: str) -> None:
+    """2xx でも本文に errors がある場合は受け付けられていないためエラーにする（CronJob と同じ判定）"""
+    if isinstance(body, dict) and body.get("errors"):
+        raise NpKakebaraiClientError(f"{api_name} returned errors: {body['errors']}")
+
+
 class NpKakebaraiClient(BaseClient):
     """NP掛け払いサービスクライアント
 
@@ -658,7 +664,9 @@ class NpKakebaraiClient(BaseClient):
                 json=payload
             )
             response.raise_for_status()
-            return response.json()
+            body = response.json()
+            _raise_if_np_errors(body, "Transaction cancel API")
+            return body
         except Exception as e:
             logger.error(
                 "NP Kakebarai transaction cancel API error",
@@ -679,7 +687,7 @@ class NpKakebaraiClient(BaseClient):
         Args:
             np_transaction_ids: NP取引IDリスト
             tracking_id: トラッキングID（任意）
-            bill_issue_base_date: 請求書発行基準日（YYYY-MM-DD）（任意、未指定時は今日の日付）
+            bill_issue_base_date: 請求書発行基準日（YYYY-MM-DD）（任意、未指定時は JST の今日の日付）
 
         Returns:
             請求確定依頼結果
@@ -689,7 +697,8 @@ class NpKakebaraiClient(BaseClient):
         """
         headers = self._get_headers(tracking_id)
         if bill_issue_base_date is None:
-            bill_issue_base_date = date.today().strftime("%Y-%m-%d")
+            # サーバのタイムゾーン（コンテナは UTC）によらず JST の日付にする
+            bill_issue_base_date = datetime.now(timezone(timedelta(hours=9))).strftime("%Y-%m-%d")
         payload = {
             "requests": [
                 {
@@ -707,7 +716,9 @@ class NpKakebaraiClient(BaseClient):
                 json=payload
             )
             response.raise_for_status()
-            return response.json()
+            body = response.json()
+            _raise_if_np_errors(body, "Billing request API")
+            return body
         except Exception as e:
             logger.error(
                 "NP Kakebarai billing request API error",

@@ -193,6 +193,7 @@ docker compose up --build
 | `POSTGRES_PASSWORD` | `postgres` | DB パスワード |
 | `DB_CONNECT_TIMEOUT` | `10` | 接続タイムアウト（秒） |
 | `DB_POOL_TIMEOUT` | `10` | プールタイムアウト（秒） |
+| `DB_LOCK_TIMEOUT` | `3` | 取引の行ロック待ちタイムアウト（秒、1 以上）。超過時は 503（`Retry-After` 付き）を返す |
 
 ### ログ設定
 

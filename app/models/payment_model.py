@@ -666,7 +666,6 @@ class Transaction(Base):
     completed_at = Column(
         DateTime(timezone=True),
         nullable=True,
-        index=True,
         comment="データ交換完了日時（状態登録/確定APIで受け取った completed_at。支払/請求の期間判定に使用）"
     )
     order_details = Column(
@@ -747,6 +746,12 @@ class Transaction(Base):
             text("COALESCE(data_id, '')"),
             unique=True,
             postgresql_where=text("tracking_id IS NOT NULL"),
+        ),
+        # 支払/請求の期間判定・L2ログ突合の対象判定は COALESCE(completed_at, created_at) で
+        # 絞り込むため、同じ式のインデックスにする（completed_at 単独のインデックスは使われない）
+        Index(
+            "ix_transactions_effective_completed_at",
+            text("COALESCE(completed_at, created_at)"),
         ),
     )
 

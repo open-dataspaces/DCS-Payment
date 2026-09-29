@@ -9,6 +9,7 @@ from app.core.custom_exceptions import (
     ResourceConflictError,
     BusinessRuleViolationError,
     DatabaseError,
+    LockTimeoutError,
 )
 from app.core.logging import get_logger, set_request_id
 from app.core.security import (
@@ -169,6 +170,7 @@ async def check_transaction_eligibility(
         status.HTTP_404_NOT_FOUND: {"description": "データなし", "model": ErrorResponse},
         status.HTTP_409_CONFLICT: {"description": "リソース競合エラー", "model": ErrorResponse},
         status.HTTP_500_INTERNAL_SERVER_ERROR: {"description": "サーバエラー", "model": ErrorResponse},
+        status.HTTP_503_SERVICE_UNAVAILABLE: {"description": "他のリクエストが同じ取引を処理中（時間をおいて再送）", "model": ErrorResponse},
     }
 )
 async def register_data_exchange_status(
@@ -178,11 +180,7 @@ async def register_data_exchange_status(
     _: None = Depends(require_permission("data-exchange:post")),
     db: Session = Depends(get_db),
 ) -> DataExchangeStatusResponse:
-    """データ交換状態を登録
-
-    トランザクション作成後、外部決済サービスが取引登録をサポートしている場合は
-    取引登録APIを呼び出す。
-    """
+    """データ交換状態を登録"""
     request_id = headers["x_tracking_id"]
     set_request_id(request_id)
 
@@ -218,7 +216,6 @@ async def register_data_exchange_status(
     try:
         result = await service.register_data_exchange(
             request,
-            tracking_id_header=request_id,
             operator_id=operator_id,
         )
 
@@ -275,17 +272,17 @@ async def register_data_exchange_status(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(e)
         )
-    except PaymentClientError as e:
-        logger.error(
-            "Request failed - external payment service error",
+    except LockTimeoutError as e:
+        logger.warning(
+            "Request failed - transaction is being processed by another request",
             tracking_id=request.tracking_id,
             error=str(e),
-            status_code=502,
-            exc_info=True
+            status_code=503
         )
         raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail="External payment service error"
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(e),
+            headers={"Retry-After": str(settings.DB_LOCK_TIMEOUT)},
         )
     except DatabaseError as e:
         logger.error(
@@ -329,6 +326,7 @@ async def register_data_exchange_status(
         status.HTTP_404_NOT_FOUND: {"description": "データなし", "model": ErrorResponse},
         status.HTTP_409_CONFLICT: {"description": "リソース競合エラー", "model": ErrorResponse},
         status.HTTP_500_INTERNAL_SERVER_ERROR: {"description": "サーバエラー", "model": ErrorResponse},
+        status.HTTP_503_SERVICE_UNAVAILABLE: {"description": "他のリクエストが同じ取引を処理中（時間をおいて再送）", "model": ErrorResponse},
     }
 )
 async def update_data_exchange_status(
@@ -399,6 +397,18 @@ async def update_data_exchange_status(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(e)
+        )
+    except LockTimeoutError as e:
+        logger.warning(
+            "Request failed - transaction is being processed by another request",
+            tracking_id=request.tracking_id,
+            error=str(e),
+            status_code=503
+        )
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(e),
+            headers={"Retry-After": str(settings.DB_LOCK_TIMEOUT)},
         )
     except DatabaseError as e:
         logger.error(
@@ -558,6 +568,8 @@ async def check_transaction_eligibility_non_fee_model(
         status.HTTP_404_NOT_FOUND: {"model": ErrorResponse, "description": "データなし"},
         status.HTTP_409_CONFLICT: {"model": ErrorResponse, "description": "リソース競合エラー"},
         status.HTTP_500_INTERNAL_SERVER_ERROR: {"model": ErrorResponse, "description": "サーバエラー"},
+        status.HTTP_503_SERVICE_UNAVAILABLE: {"description": "他のリクエストが同じ取引を処理中（時間をおいて再送）", "model": ErrorResponse},
+        status.HTTP_502_BAD_GATEWAY: {"description": "外部決済サービスエラー", "model": ErrorResponse},
     }
 )
 async def confirm_data_exchange(
@@ -644,6 +656,18 @@ async def confirm_data_exchange(
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail="External payment service error"
+        )
+    except LockTimeoutError as e:
+        logger.warning(
+            "Request failed - transaction is being processed by another request",
+            tracking_id=request.tracking_id or request_id,
+            error=str(e),
+            status_code=503
+        )
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(e),
+            headers={"Retry-After": str(settings.DB_LOCK_TIMEOUT)},
         )
     except DatabaseError as e:
         logger.error(

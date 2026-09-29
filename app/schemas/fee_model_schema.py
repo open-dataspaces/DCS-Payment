@@ -451,23 +451,48 @@ class BillingAmountListResponse(BaseModel):
 
 
 # データ交換処理状態登録
+def _validate_data_id_list(v: List[str]) -> List[str]:
+    """データIDリストの各要素が空文字でなく、重複しないことを検証
+
+    同じ data_id が重複すると、NP へ同じ取引を二重に与信依頼したり、
+    同一 tracking_id 配下の data_id の一意制約に違反したりするため受け付けない。
+    """
+    seen = set()
+    for i, item in enumerate(v):
+        if not item or not item.strip():
+            raise ValueError(f'data_id_list[{i}] must not be empty')
+        if item in seen:
+            raise ValueError(f'data_id_list[{i}] is duplicated: {item}')
+        seen.add(item)
+    return v
+
+
+def _validate_tracking_id(v: str) -> str:
+    """tracking_id は UUID 形式（小文字の正規形にそろえる）"""
+    try:
+        return str(UUID(v))
+    except ValueError:
+        raise ValueError('tracking_id must be a valid UUID')
+
+
 class DataExchangeRequest(BaseModel):
 
-    tracking_id: str = Field(..., description="トラッキングID", min_length=1)
+    tracking_id: str = Field(..., description="トラッキングID（UUID）", min_length=1)
     provider_id: str = Field(..., description="データ提供者ID", min_length=1, max_length=255)
     consumer_id: str = Field(..., description="データ利用者ID", min_length=1, max_length=255)
     data_id_list: List[str] = Field(..., description="データIDのリスト(外部システムにて発行)", min_length=1)
-    completed_at: datetime = Field(..., description="データ交換処理完了日時（ISO8601）")
+    completed_at: RequestDateTime = Field(..., description="データ交換処理完了日時（ISO8601。タイムゾーン省略時は UTC）")
     status: DataExchangeStatus = Field(..., description="データ交換ステータス (completed: 交換完了, failed: 交換失敗)")
+
+    @field_validator('tracking_id')
+    @classmethod
+    def validate_tracking_id_format(cls, v: str) -> str:
+        return _validate_tracking_id(v)
 
     @field_validator('data_id_list')
     @classmethod
     def validate_data_id_list_elements(cls, v: List[str]) -> List[str]:
-        """データIDリストの各要素が空文字でないことを検証"""
-        for i, item in enumerate(v):
-            if not item or not item.strip():
-                raise ValueError(f'data_id_list[{i}] must not be empty')
-        return v
+        return _validate_data_id_list(v)
 
     model_config = ConfigDict(
         extra="forbid",  # 未定義フィールドを即座に拒否
@@ -479,8 +504,13 @@ class DataExchangeStatusResponse(BaseModel):
 
 # データ交換処理状態更新
 class DataExchangeStatusRequest(BaseModel):
-    tracking_id: str = Field(..., description="トラッキングID", min_length=1)
+    tracking_id: str = Field(..., description="トラッキングID（UUID）", min_length=1)
     status: DataExchangeStatus = Field(..., description="データ交換ステータス (completed: 交換完了, failed: 交換失敗)")
+
+    @field_validator('tracking_id')
+    @classmethod
+    def validate_tracking_id_format(cls, v: str) -> str:
+        return _validate_tracking_id(v)
 
     model_config = ConfigDict(
         extra="forbid",  # 未定義フィールドを即座に拒否
@@ -494,11 +524,7 @@ class TransactionEligibilityRequest(BaseModel):
     @field_validator('data_id_list')
     @classmethod
     def validate_data_id_list_elements(cls, v: List[str]) -> List[str]:
-        """データIDリストの各要素が空文字でないことを検証"""
-        for i, item in enumerate(v):
-            if not item or not item.strip():
-                raise ValueError(f'data_id_list[{i}] must not be empty')
-        return v
+        return _validate_data_id_list(v)
 
     model_config = ConfigDict(
         extra="forbid",  # 未定義フィールドを即座に拒否
@@ -524,7 +550,7 @@ class TransactionEligibilityNonFeeModelRequest(BaseModel):
     payment_service_id: UUID = Field(..., description="決済サービスID")
     tax_classification: TaxClassification = Field(..., description="税区分 (taxable: 課税, non_taxable: 非課税)")
     tax_rate: Decimal = Field(..., description="税率", decimal_places=4, ge=0, le=1)
-    completed_at: datetime = Field(..., description="データ交換処理完了日時（ISO8601）")
+    completed_at: RequestDateTime = Field(..., description="データ交換処理完了日時（ISO8601。タイムゾーン省略時は UTC）")
     amount: RequestAmount = Field(..., description="支払い予定額")
 
     @model_validator(mode='after')
@@ -557,7 +583,7 @@ class DataExchangeNonFeeModelRequest(BaseModel):
     payment_service_id: UUID = Field(..., description="決済サービスID")
     tax_classification: TaxClassification = Field(..., description="税区分 (taxable: 課税, non_taxable: 非課税)")
     tax_rate: Decimal = Field(..., description="税率", decimal_places=4, ge=0, le=1)
-    completed_at: datetime = Field(..., description="データ交換処理完了日時（ISO8601）")
+    completed_at: RequestDateTime = Field(..., description="データ交換処理完了日時（ISO8601。タイムゾーン省略時は UTC）")
     amount: RequestAmount = Field(..., description="支払い予定額")
 
     @field_validator('tracking_id')

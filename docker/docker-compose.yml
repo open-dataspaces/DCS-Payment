@@ -92,6 +92,7 @@ services:
       POSTGRES_PASSWORD: postgres
       DB_CONNECT_TIMEOUT: ${DB_CONNECT_TIMEOUT:-10}
       DB_POOL_TIMEOUT: ${DB_POOL_TIMEOUT:-10}
+      DB_LOCK_TIMEOUT: ${DB_LOCK_TIMEOUT:-3}
 
       # ===========================================
       # ログ設定（開発環境）

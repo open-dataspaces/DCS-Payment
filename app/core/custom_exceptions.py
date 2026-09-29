@@ -48,6 +48,20 @@ class DatabaseError(RepositoryError):
         self.original_error = original_error
 
 
+class LockTimeoutError(RepositoryError):
+    """行ロック待ちの上限超過（他のリクエストや CronJob が同じ行を処理中）
+
+    確定済み・キャンセル済みなどの 409 と異なり、時間をおいて再送すれば処理できる。
+    """
+
+    def __init__(
+        self,
+        message: str = "Resource is being processed by another request. Retry later",
+        **kwargs
+    ):
+        super().__init__(message, error_code="LOCK_TIMEOUT", **kwargs)
+
+
 class RecordNotFoundError(RepositoryError):
     """レコードが見つからない"""
     
@@ -241,6 +255,9 @@ def map_exception_to_http_status(exc: Exception) -> tuple[int, str, str]:
     if isinstance(exc, IntegrityError):
         return (409, "INTEGRITY_ERROR", str(exc))
     
+    if isinstance(exc, LockTimeoutError):
+        return (503, "LOCK_TIMEOUT", str(exc))
+
     if isinstance(exc, DatabaseError):
         return (500, "DATABASE_ERROR", str(exc))
     
@@ -312,6 +329,9 @@ def wrap_database_error(func):
                 message="Data type error"
             )
         except OperationalError as e:
+            if getattr(e.orig, "pgcode", None) == "55P03":
+                # lock_timeout 超過（他のリクエストや CronJob が同じ行を処理中）
+                raise LockTimeoutError()
             # データベース接続エラーなど
             raise DatabaseError(
                 message="Database operation error",

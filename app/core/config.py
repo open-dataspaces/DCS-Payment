@@ -36,6 +36,7 @@ class Settings(BaseSettings):
     # ===========================================
     DB_CONNECT_TIMEOUT: int = 10  # DB接続確立のタイムアウト（秒）
     DB_POOL_TIMEOUT: int = 10     # プールから接続取得のタイムアウト（秒）
+    DB_LOCK_TIMEOUT: int = 3      # 取引の行ロック待ちのタイムアウト（秒）。超過時は 503（Retry-After 付き）
 
     # ===========================================
     # Database ACCESS (Develop) - ローカルDocker用
@@ -109,6 +110,14 @@ class Settings(BaseSettings):
     # 環境変数ではカンマ区切り（a,b）または JSON 配列（["a","b"]）で指定する
     # （NoDecode: pydantic-settings に JSON として解釈させず、parse_allowed_hosts で解釈する）
     ALLOWED_HOSTS: Annotated[List[str], NoDecode] = []
+
+    @field_validator('DB_LOCK_TIMEOUT')
+    @classmethod
+    def validate_db_lock_timeout(cls, v: int) -> int:
+        """PostgreSQL の lock_timeout は 0 で無制限になるため、1 秒以上に限る"""
+        if v < 1:
+            raise ValueError('DB_LOCK_TIMEOUT must be 1 or greater')
+        return v
 
     @field_validator('SECRET_KEY')
     @classmethod
