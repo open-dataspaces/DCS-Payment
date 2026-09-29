@@ -147,7 +147,7 @@ docker compose up --build
 
 | 変数名 | デフォルト値 | 説明 |
 |---|---|---|
-| `X_PAYMENT_API_KEY` | `dev-payment-api-key` | API キー |
+| `X_PAYMENT_API_KEY` | `dev-payment-api-key` | API キー（リクエストヘッダ `X-Payment-API-Key` の値と照合） |
 
 ### L3 認証設定
 

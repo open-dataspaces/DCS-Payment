@@ -91,10 +91,12 @@ async def verify_access_token(
 
 async def verify_request_headers(
     user_agent: str = Header(..., alias="User-Agent"),
-    x_tracking_id: str = Header(..., alias="X-TrackingId"),
+    # ヘッダ名は大文字小文字を区別しない（RFC 9110）ため、alias は OpenAPI 上の表記のみに影響する。
+    # title を明示しないと OpenAPI 上で "X-Trackingid" / "X-Payment-Api-Key" と表記されるため指定する。
+    x_tracking_id: str = Header(..., alias="X-TrackingId", title="X-TrackingId"),
     accept_language: str = Header(default="ja-JP", alias="Accept-Language"),
     content_type: Literal["application/json"] = Header(..., alias="Content-Type"),
-    x_payment_api_key: str = Header(..., alias="x-payment-api-key")
+    x_payment_api_key: str = Header(..., alias="X-Payment-API-Key", title="X-Payment-API-Key")
 ):
     
     # User-Agent の空文字チェック
@@ -108,7 +110,7 @@ async def verify_request_headers(
     validated_tracking_id = validate_tracking_id(x_tracking_id)
 
     """
-    x_payment_api_keyヘッダーのAPIキーの検証をする
+    X-Payment-API-KeyヘッダーのAPIキーの検証をする
     """
     if x_payment_api_key != settings.X_PAYMENT_API_KEY:
         logger.warning(

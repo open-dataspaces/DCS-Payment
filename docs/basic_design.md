@@ -380,6 +380,8 @@ end
 * **Base URL**: `/api/v1`
 * **バージョン管理**: URL版管理方式（/v1）
 * **認証**: `Authorization: Bearer <JWT>`
+* **APIキー**: `X-Payment-API-Key: <APIキー>`
+* **HTTPヘッダ名の表記**: 標準ヘッダは RFC の表記に従う（例: `Authorization`, `Content-Type`）。独自ヘッダは先頭を `X-` とし、ハイフン区切りの各単語の先頭のみ大文字、頭字語は全て大文字とする（例: `X-Payment-API-Key`）。ODP で定義されたヘッダは ODP の表記に従う（例: `X-TrackingId`）。なお、HTTP ヘッダ名は大文字小文字を区別しない（RFC 9110）。
 * **リクエスト形式**: 
   - Content-Type: `application/json`
   - 文字エンコーディング: UTF-8
