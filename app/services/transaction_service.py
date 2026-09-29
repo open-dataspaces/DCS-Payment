@@ -86,13 +86,13 @@ class TransactionService:
             self._payment_client = PaymentClient()
         return self._payment_client
 
-    async def close(self) -> None:
+    def close(self) -> None:
         """リソースをクリーンアップ"""
         if self._payment_client is not None:
-            await self._payment_client.close()
+            self._payment_client.close()
             self._payment_client = None
 
-    async def check_transaction_eligibility(
+    def check_transaction_eligibility(
         self,
         request: TransactionEligibilityRequest,
         tracking_id: str,
@@ -256,7 +256,7 @@ class TransactionService:
 
             try:
                 # NP掛け払い取引登録APIを呼び出し
-                registration_result = await self.payment_client.register_transaction(
+                registration_result = self.payment_client.register_transaction(
                     external_buyer_id=external_buyer_id,
                     payment_service_id=payment_service_id,
                     shop_transaction_id=tracking_id,
@@ -276,7 +276,7 @@ class TransactionService:
                         detail=registration_result.detail,
                     )
                     # 1件でも NG なら取引全体を不可とし、NP側で採番済みの取引は取り消す
-                    await self._cancel_external_transactions_best_effort(
+                    self._cancel_external_transactions_best_effort(
                         payment_service_id=payment_service_id,
                         external_transaction_ids=registration_result.registered_external_transaction_ids,
                         reason="authori NG on other item",
@@ -360,7 +360,7 @@ class TransactionService:
                         error=str(e),
                         exc_info=True,
                     )
-                    await self._cancel_external_transactions_best_effort(
+                    self._cancel_external_transactions_best_effort(
                         payment_service_id=payment_service_id,
                         external_transaction_ids=registration_result.registered_external_transaction_ids,
                         reason="local save failed after external registration",
@@ -443,7 +443,7 @@ class TransactionService:
             resource="Transaction",
         )
 
-    async def check_transaction_eligibility_non_fee_model(
+    def check_transaction_eligibility_non_fee_model(
         self,
         request: TransactionEligibilityNonFeeModelRequest,
         tracking_id: str,
@@ -565,7 +565,7 @@ class TransactionService:
 
         try:
             # NP掛け払い取引登録APIを呼び出し
-            registration_result = await self.payment_client.register_transaction(
+            registration_result = self.payment_client.register_transaction(
                 external_buyer_id=external_buyer_id,
                 payment_service_id=payment_service_id,
                 shop_transaction_id=tracking_id,
@@ -584,7 +584,7 @@ class TransactionService:
                     authori_ng_reason=registration_result.authori_ng_reason,
                     detail=registration_result.detail,
                 )
-                await self._cancel_external_transactions_best_effort(
+                self._cancel_external_transactions_best_effort(
                     payment_service_id=payment_service_id,
                     external_transaction_ids=registration_result.registered_external_transaction_ids,
                     reason="authori NG (non fee model)",
@@ -643,7 +643,7 @@ class TransactionService:
                     error=str(e),
                     exc_info=True,
                 )
-                await self._cancel_external_transactions_best_effort(
+                self._cancel_external_transactions_best_effort(
                     payment_service_id=payment_service_id,
                     external_transaction_ids=registration_result.registered_external_transaction_ids,
                     reason="local save failed after external registration (non fee model)",
@@ -683,7 +683,7 @@ class TransactionService:
             tracking_id=tracking_id,
         )
 
-    async def register_data_exchange(
+    def register_data_exchange(
         self,
         request: DataExchangeRequest,
         operator_id: Optional[str] = None,
@@ -1177,7 +1177,7 @@ class TransactionService:
         )
         return amount
 
-    async def _cancel_external_transactions_best_effort(
+    def _cancel_external_transactions_best_effort(
         self,
         payment_service_id: str,
         external_transaction_ids: list[str],
@@ -1192,7 +1192,7 @@ class TransactionService:
         if not ids:
             return
         try:
-            await self.payment_client.cancel_transaction(
+            self.payment_client.cancel_transaction(
                 payment_service_id=payment_service_id,
                 np_transaction_ids=ids,
             )
@@ -1232,7 +1232,7 @@ class TransactionService:
             "telNo": tel_no,
         }
 
-    async def _request_billing_if_applicable(
+    def _request_billing_if_applicable(
         self,
         payment_service_id: str,
         records: list[Transaction],
@@ -1290,7 +1290,7 @@ class TransactionService:
         bill_issue_base_date = (
             max(completed_dates).astimezone(JST).strftime("%Y-%m-%d") if completed_dates else None
         )
-        await self.payment_client.request_billing(
+        self.payment_client.request_billing(
             payment_service_id=payment_service_id,
             np_transaction_ids=np_transaction_ids,
             bill_issue_base_date=bill_issue_base_date,
@@ -1348,7 +1348,7 @@ class TransactionService:
                 resource="Transaction",
             )
 
-    async def confirm_data_exchange_non_fee_model(
+    def confirm_data_exchange_non_fee_model(
         self,
         request: DataExchangeNonFeeModelRequest,
         tracking_id_header: Optional[str] = None,
@@ -1471,7 +1471,7 @@ class TransactionService:
                 )
 
                 # NP掛け払い請求確定依頼
-                await self._request_billing_if_applicable(
+                self._request_billing_if_applicable(
                     payment_service_id=billing_payment_service_id,
                     records=pre_registered,
                     billed_ids=billed_external_ids,

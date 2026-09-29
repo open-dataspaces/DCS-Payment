@@ -546,9 +546,8 @@ class TransactionRepository:
 
         query = self.db.query(Transaction).filter(Transaction.tracking_id == tracking_id)
         if for_update:
-            # ロック待ちの上限を設ける（このトランザクションの間だけ有効）。DB 呼び出しは同期のため
-            # 待っている間はイベントループが止まる。CronJob が NP 呼び出し中にロックを保持している
-            # 場合などに待ち続けないよう、超過時は LockTimeoutError（503・再送可）にする
+            # ロック待ちの上限を設ける（このトランザクションの間だけ有効）。CronJob が NP 呼び出し中に
+            # ロックを保持している場合などに待ち続けないよう、超過時は LockTimeoutError（503・再送可）にする
             self.db.execute(
                 text("SELECT set_config('lock_timeout', :timeout, true)"),
                 {"timeout": f"{settings.DB_LOCK_TIMEOUT}s"},

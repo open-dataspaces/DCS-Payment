@@ -52,7 +52,7 @@ router = APIRouter()
         status.HTTP_500_INTERNAL_SERVER_ERROR: {"description": "サーバエラー", "model": ErrorResponse},
     }
 )
-async def create_fee_model(
+def create_fee_model(
     request: FeeModelCreateRequest,
     headers: dict = Depends(verify_request_headers),
     credential: dict = Depends(verify_access_token),
@@ -143,7 +143,7 @@ async def create_fee_model(
         status.HTTP_500_INTERNAL_SERVER_ERROR: {"description": "サーバエラー", "model": ErrorResponse},
     }
 )
-async def list_fee_models(
+def list_fee_models(
     response: Response,
     headers: dict = Depends(verify_request_headers),
     credential: dict = Depends(verify_access_token),
@@ -243,7 +243,7 @@ async def list_fee_models(
         status.HTTP_500_INTERNAL_SERVER_ERROR: {"description": "サーバエラー", "model": ErrorResponse},
     }
 )
-async def get_fee_model(
+def get_fee_model(
     fee_model_id: str,
     response: Response,
     headers: dict = Depends(verify_request_headers),
@@ -348,7 +348,7 @@ async def get_fee_model(
         status.HTTP_500_INTERNAL_SERVER_ERROR: {"description": "サーバエラー", "model": ErrorResponse},
     }
 )
-async def update_fee_model(
+def update_fee_model(
     fee_model_id: str,
     request: FeeModelUpdateRequest,
     headers: dict = Depends(verify_request_headers),
@@ -471,7 +471,7 @@ async def update_fee_model(
         status.HTTP_500_INTERNAL_SERVER_ERROR: {"description": "サーバエラー", "model": ErrorResponse},
     }
 )
-async def delete_fee_model(
+def delete_fee_model(
     fee_model_id: str,
     headers: dict = Depends(verify_request_headers),
     credential: dict = Depends(verify_access_token),

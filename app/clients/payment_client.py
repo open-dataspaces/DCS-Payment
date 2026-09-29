@@ -6,7 +6,7 @@ from typing import Any, Optional
 from urllib.parse import urlparse
 from uuid import uuid4
 
-from app.clients.base_client import BaseClient
+from app.clients.base_client import SyncBaseClient
 from app.core.config import settings
 from app.core.logging import get_logger
 from app.utils.money import tax_rate_to_percent, to_external_amount_str
@@ -151,10 +151,10 @@ class PaymentClient:
             self._np_kakebarai_client = NpKakebaraiClient()
         return self._np_kakebarai_client
 
-    async def close(self) -> None:
+    def close(self) -> None:
         """全クライアントをクローズ"""
         if self._np_kakebarai_client is not None:
-            await self._np_kakebarai_client.close()
+            self._np_kakebarai_client.close()
             self._np_kakebarai_client = None
 
     def is_np_kakebarai(self, payment_service_id: str) -> bool:
@@ -182,7 +182,7 @@ class PaymentClient:
         # 現在はNP掛け払いのみサポート
         return self.is_np_kakebarai(payment_service_id)
 
-    async def register_transaction(
+    def register_transaction(
         self,
         external_buyer_id: str,
         payment_service_id: str,
@@ -212,7 +212,7 @@ class PaymentClient:
         """
         # NP掛け払いの場合
         if self.is_np_kakebarai(payment_service_id):
-            return await self._register_transaction_np_kakebarai(
+            return self._register_transaction_np_kakebarai(
                 np_buyer_id=external_buyer_id,
                 shop_transaction_id=shop_transaction_id,
                 transactions=transactions,
@@ -232,7 +232,7 @@ class PaymentClient:
             f"Transaction registration not supported for payment service: {payment_service_id}"
         )
 
-    async def _register_transaction_np_kakebarai(
+    def _register_transaction_np_kakebarai(
         self,
         np_buyer_id: str,
         shop_transaction_id: str,
@@ -265,7 +265,7 @@ class PaymentClient:
             ]
 
             # NP掛け払いの取引登録APIを直接呼び出し
-            response = await self.np_kakebarai.register_transactions(
+            response = self.np_kakebarai.register_transactions(
                 np_buyer_id=np_buyer_id,
                 transaction_infos=transaction_infos,
                 tracking_id=tracking_id
@@ -468,17 +468,17 @@ class PaymentClient:
             info["deliveryInfo"] = delivery_info
         return info
 
-    async def cancel_transaction(
+    def cancel_transaction(
         self,
         payment_service_id: str,
         np_transaction_ids: list[str],
     ) -> dict[str, Any]:
         """取引キャンセル"""
         if self.is_np_kakebarai(payment_service_id):
-            return await self.np_kakebarai.cancel_transactions(np_transaction_ids)
+            return self.np_kakebarai.cancel_transactions(np_transaction_ids)
         raise PaymentClientError(f"Cancel not supported for: {payment_service_id}")
 
-    async def request_billing(
+    def request_billing(
         self,
         payment_service_id: str,
         np_transaction_ids: list[str],
@@ -487,7 +487,7 @@ class PaymentClient:
         """請求確定依頼"""
         if self.is_np_kakebarai(payment_service_id):
             try:
-                return await self.np_kakebarai.request_billing(
+                return self.np_kakebarai.request_billing(
                     np_transaction_ids, bill_issue_base_date=bill_issue_base_date
                 )
             except NpKakebaraiClientError as e:
@@ -503,7 +503,7 @@ def _raise_if_np_errors(body: Any, api_name: str) -> None:
         raise NpKakebaraiClientError(f"{api_name} returned errors: {body['errors']}")
 
 
-class NpKakebaraiClient(BaseClient):
+class NpKakebaraiClient(SyncBaseClient):
     """NP掛け払いサービスクライアント
 
     NP掛け払いAPIへの接続を行うクライアント。
@@ -545,7 +545,7 @@ class NpKakebaraiClient(BaseClient):
             headers["X-TrackingID"] = tracking_id
         return headers
 
-    async def register_transactions(
+    def register_transactions(
         self,
         np_buyer_id: str,
         transaction_infos: list[dict[str, Any]],
@@ -575,7 +575,7 @@ class NpKakebaraiClient(BaseClient):
         }
 
         try:
-            response = await self.post(
+            response = self.post(
                 "/v1/transactions",
                 headers=headers,
                 json=payload
@@ -633,7 +633,7 @@ class NpKakebaraiClient(BaseClient):
                 ) from e
             raise NpKakebaraiClientError(f"Transaction registration API error: {e}") from e
 
-    async def cancel_transactions(
+    def cancel_transactions(
         self,
         np_transaction_ids: list[str],
         tracking_id: Optional[str] = None,
@@ -658,7 +658,7 @@ class NpKakebaraiClient(BaseClient):
         }
 
         try:
-            response = await self.post(
+            response = self.post(
                 "/v1/transactions/cancel",
                 headers=headers,
                 json=payload
@@ -674,7 +674,7 @@ class NpKakebaraiClient(BaseClient):
             )
             raise NpKakebaraiClientError(f"Transaction cancel API error: {e}") from e
 
-    async def request_billing(
+    def request_billing(
         self,
         np_transaction_ids: list[str],
         tracking_id: Optional[str] = None,
@@ -710,7 +710,7 @@ class NpKakebaraiClient(BaseClient):
         }
 
         try:
-            response = await self.post(
+            response = self.post(
                 "/v1/bills/request",
                 headers=headers,
                 json=payload

@@ -60,7 +60,7 @@ router = APIRouter()
         status.HTTP_500_INTERNAL_SERVER_ERROR: {"description": "サーバエラー", "model": ErrorResponse},
     }
 )
-async def check_transaction_eligibility(
+def check_transaction_eligibility(
     request: TransactionEligibilityRequest,
     headers: dict = Depends(verify_request_headers),
     credential: dict = Depends(verify_access_token),
@@ -87,7 +87,7 @@ async def check_transaction_eligibility(
     service = TransactionService(db)
     try:
         # 与信確認を含む取引可否確認を実行
-        result = await service.check_transaction_eligibility(
+        result = service.check_transaction_eligibility(
             request,
             tracking_id=tracking_id,
         )
@@ -154,7 +154,7 @@ async def check_transaction_eligibility(
             detail="unexpected error"
         )
     finally:
-        await service.close()
+        service.close()
 
 
 @router.post(
@@ -173,7 +173,7 @@ async def check_transaction_eligibility(
         status.HTTP_503_SERVICE_UNAVAILABLE: {"description": "他のリクエストが同じ取引を処理中（時間をおいて再送）", "model": ErrorResponse},
     }
 )
-async def register_data_exchange_status(
+def register_data_exchange_status(
     request: DataExchangeRequest,
     headers: dict = Depends(verify_request_headers),
     credential: dict = Depends(verify_access_token),
@@ -214,7 +214,7 @@ async def register_data_exchange_status(
 
     service = TransactionService(db)
     try:
-        result = await service.register_data_exchange(
+        result = service.register_data_exchange(
             request,
             operator_id=operator_id,
         )
@@ -310,7 +310,7 @@ async def register_data_exchange_status(
             detail="unexpected error"
         )
     finally:
-        await service.close()
+        service.close()
 
 
 @router.put(
@@ -329,7 +329,7 @@ async def register_data_exchange_status(
         status.HTTP_503_SERVICE_UNAVAILABLE: {"description": "他のリクエストが同じ取引を処理中（時間をおいて再送）", "model": ErrorResponse},
     }
 )
-async def update_data_exchange_status(
+def update_data_exchange_status(
     request: DataExchangeStatusRequest,
     headers: dict = Depends(verify_request_headers),
     credential: dict = Depends(verify_access_token),
@@ -436,7 +436,7 @@ async def update_data_exchange_status(
             detail="unexpected error"
         )
     finally:
-        await service.close()
+        service.close()
 
 
 # --------------------------------------------------------------------
@@ -457,7 +457,7 @@ async def update_data_exchange_status(
         status.HTTP_500_INTERNAL_SERVER_ERROR: {"description": "サーバエラー", "model": ErrorResponse},
     }
 )
-async def check_transaction_eligibility_non_fee_model(
+def check_transaction_eligibility_non_fee_model(
     request: TransactionEligibilityNonFeeModelRequest,
     headers: dict = Depends(verify_request_headers),
     credential: dict = Depends(verify_access_token),
@@ -484,7 +484,7 @@ async def check_transaction_eligibility_non_fee_model(
     service = TransactionService(db)
     try:
         # 与信確認を含む取引可否確認を実行（利用料モデル無し）
-        result = await service.check_transaction_eligibility_non_fee_model(
+        result = service.check_transaction_eligibility_non_fee_model(
             request,
             tracking_id=tracking_id,
         )
@@ -552,7 +552,7 @@ async def check_transaction_eligibility_non_fee_model(
         )
     finally:
         # PaymentClientのリソースをクリーンアップ
-        await service.close()
+        service.close()
 
 
 @router.post(
@@ -572,7 +572,7 @@ async def check_transaction_eligibility_non_fee_model(
         status.HTTP_502_BAD_GATEWAY: {"description": "外部決済サービスエラー", "model": ErrorResponse},
     }
 )
-async def confirm_data_exchange(
+def confirm_data_exchange(
     request: DataExchangeNonFeeModelRequest,
     headers: dict = Depends(verify_request_headers),
     credential: dict = Depends(verify_access_token),
@@ -603,7 +603,7 @@ async def confirm_data_exchange(
     service = TransactionService(db)
     try:
         # 取引登録を含むデータ交換取引金額確定を実行
-        result = await service.confirm_data_exchange_non_fee_model(
+        result = service.confirm_data_exchange_non_fee_model(
             request,
             tracking_id_header=request_id,
         )
@@ -694,7 +694,7 @@ async def confirm_data_exchange(
         )
     finally:
         # PaymentClientのリソースをクリーンアップ
-        await service.close()
+        service.close()
 
 
 # --------------------------------------------------------------------
@@ -713,7 +713,7 @@ async def confirm_data_exchange(
         status.HTTP_500_INTERNAL_SERVER_ERROR: {"description": "サーバエラー", "model": ErrorResponse},
     }
 )
-async def get_consumer_transactions(
+def get_consumer_transactions(
     request: ConsumerTransactionRequest,
     headers: dict = Depends(verify_request_headers),
     credential: dict = Depends(verify_access_token),

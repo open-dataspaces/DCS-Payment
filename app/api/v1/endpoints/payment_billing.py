@@ -42,7 +42,7 @@ router = APIRouter()
         status.HTTP_500_INTERNAL_SERVER_ERROR: {"description": "サーバエラー", "model": ErrorResponse},
     }
 )
-async def get_payment_schedule(
+def get_payment_schedule(
     request: PaymentScheduleRequest,
     headers: dict = Depends(verify_request_headers),
     credential: dict = Depends(verify_access_token),
@@ -123,7 +123,7 @@ async def get_payment_schedule(
         status.HTTP_500_INTERNAL_SERVER_ERROR: {"description": "サーバエラー", "model": ErrorResponse},
     }
 )
-async def get_billing_schedule(
+def get_billing_schedule(
     request: BillingScheduleRequest,
     headers: dict = Depends(verify_request_headers),
     credential: dict = Depends(verify_access_token),

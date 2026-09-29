@@ -36,6 +36,8 @@ class Settings(BaseSettings):
     # Database Connection Pool Settings
     # ===========================================
     DB_CONNECT_TIMEOUT: int = 10  # DB接続確立のタイムアウト（秒）
+    DB_POOL_SIZE: int = 5         # 接続プールに保持する接続数
+    DB_MAX_OVERFLOW: int = 10     # DB_POOL_SIZE を超えて一時的に作る接続数（同時処理数の上限は合計）
     DB_POOL_TIMEOUT: int = 10     # プールから接続取得のタイムアウト（秒）
     DB_LOCK_TIMEOUT: int = 3      # 取引の行ロック待ちのタイムアウト（秒）。超過時は 503（Retry-After 付き）
 
