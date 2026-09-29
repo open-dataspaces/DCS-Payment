@@ -224,7 +224,7 @@ end
 > - 取引可否確認API は与信OK時に、リクエストヘッダ `X-TrackingId` の値を `transactions.tracking_id` として取引を事前登録し、レスポンスの `tracking_id` にも同じ値を返す。
 > - データ交換状態登録API（POST /api/v1/data-exchange/status）は本文の `tracking_id` で事前登録行を特定する。**取引可否確認時の `X-TrackingId` と同じ値を指定すること**（provider_id / consumer_id / data_id での曖昧な紐付けは行わない）。
 > - 利用料モデルなしの取引金額確定API（POST /api/v1/data-exchange/non-fee-model/confirm）も同様に、本文の `tracking_id`（省略時は `X-TrackingId`）で事前登録行を特定する。
-> - 同一 `tracking_id` 配下で `data_id` は一意（DB の一意インデックス `uq_transaction_tracking_data`）。取引可否確認API を同じ `tracking_id` で再送した場合、同一内容なら再登録せず `allowed` を返す。
+> - 1 つの `tracking_id` は利用料モデルありと利用料モデルなしのどちらか一方のデータ交換にだけ使える。もう一方の API で同じ `tracking_id` を指定した場合は 409 とする。
 
 ### (3) 購入確定処理シーケンス
 
@@ -273,11 +273,7 @@ end
 
 ```
 
-> **確定判定**（詳細は `cronjob/docs/feature-spec-checkl2log.md`「2.3 確定判定」）
-> - L2 ログの statusCode が 2xx（200 に限定しない）、かつ提供者・利用者の両方が completed を報告した取引のみ確定（settled）とし、NP 請求確定依頼を行う。
-> - L2 ログが 2xx 以外（遡及期間 `L2_LOG_LOOKBACK_DAYS` を超えても未検出の timeout を含む）、一方の当事者でも failed を報告した、または一方が未報告のまま遡及期間を超えた取引は確定せず、NP 取引をキャンセルする。
-> - 確定済み・キャンセル済みの取引は、データ交換状態登録・更新 API で状態を変更できない（409）。キャンセル済みの取引は取引金額確定 API（利用料モデルなし）でも確定できない（409）。
-> - L2 ログの S3 格納を前提とするため、確定は CronJob の次回実行時となる（リアルタイムではない）。CronJob は `concurrencyPolicy: Forbid` で多重起動を禁止する。
+> 確定・キャンセルの判定条件は `cronjob/docs/feature-spec-checkl2log.md`「2.3 確定判定」を参照。
 
 ### (4) 決済処理シーケンス
 
@@ -719,13 +715,13 @@ CREATE INDEX ix_payment_user_consumer_provider ON payment_service_user_registrat
 | calculated_amount | numeric(15,2) | **NOT NULL** | 計算済金額(税込) |
 | consumer_exchange_status | varchar(50) | **NOT NULL**, DEFAULT 'pending', CHECK (IN ('pending', 'completed', 'failed')) | 消費者データ交換ステータス |
 | provider_exchange_status | varchar(50) | **NOT NULL**, DEFAULT 'pending', CHECK (IN ('pending', 'completed', 'failed')) | 提供者データ交換ステータス |
-| l2_http_status | varchar(10) | **NOT NULL**, DEFAULT 'pending' | L2ログHTTPステータス(pending/HTTPステータスコード) |
+| l2_http_status | varchar(10) | **NOT NULL**, DEFAULT 'pending' | L2ログHTTPステータス(pending/HTTPステータスコード/timeout。2xx を成功とする) |
 | settlement_status | varchar(50) | **NOT NULL**, DEFAULT 'unsettled', CHECK (IN ('settled', 'unsettled', 'cancelled')) | 精算決済状態 |
 | order_details | text | NULL | 注文内容 |
 | request_date | timestamptz | NULL | 請求日 |
 | payment_deadline | timestamptz | NULL, CHECK (>= request_date) | 支払期限 |
 | paid_at | timestamptz | NULL | 支払完了日時 |
-| completed_at | timestamptz | NULL, INDEX | データ交換完了日時（状態登録/確定APIの completed_at。支払/請求の期間判定・NP請求基準日に使用。未設定時は created_at で代替） |
+| completed_at | timestamptz | NULL | データ交換完了日時（支払/請求の期間判定に使用） |
 | external_data | jsonb | NULL | 外部決済サービス固有データ |
 | created_at | timestamptz | **NOT NULL**, DEFAULT now() | 登録日時 |
 | updated_at | timestamptz | **NOT NULL**, DEFAULT now() | 更新日時 |
@@ -746,6 +742,8 @@ CREATE INDEX ix_payment_user_consumer_provider ON payment_service_user_registrat
 | ix_transactions_settlement_status | settlement_status | INDEX | 精算決済状態検索用 |
 | ix_transaction_provider_consumer_data | provider_id, consumer_id, data_id | INDEX | 複合検索用 |
 | ix_transaction_request_date | request_date | INDEX | 請求日検索用 |
+| ix_transactions_effective_completed_at | COALESCE(completed_at, created_at) | INDEX | 期間判定・L2ログ突合の対象判定（データ交換完了日時、未設定時は created_at）用 |
+| uq_transaction_tracking_data | tracking_id, COALESCE(data_id, '') | UNIQUE（tracking_id IS NOT NULL の行のみ） | 同一 tracking_id 配下での data_id の重複防止 |
 
 ```sql
 CREATE TABLE IF NOT EXISTS transactions (
@@ -794,6 +792,8 @@ CREATE INDEX ix_transactions_l2_http_status ON transactions(l2_http_status);
 CREATE INDEX ix_transactions_settlement_status ON transactions(settlement_status);
 CREATE INDEX ix_transaction_provider_consumer_data ON transactions(provider_id, consumer_id, data_id);
 CREATE INDEX ix_transaction_request_date ON transactions(request_date);
+CREATE INDEX ix_transactions_effective_completed_at ON transactions(COALESCE(completed_at, created_at));
+CREATE UNIQUE INDEX uq_transaction_tracking_data ON transactions(tracking_id, COALESCE(data_id, '')) WHERE tracking_id IS NOT NULL;
 ```
 
 ---
@@ -817,10 +817,9 @@ CREATE INDEX ix_transaction_request_date ON transactions(request_date);
 | 利用料モデルの更新<br>（PUT /fee-model/{id}） | 同じ利用料モデルの同時更新・削除 | 楽観的ロック。`version` 列を UPDATE 時の条件（`WHERE version = 読込時の値`）に含め、更新のたびに +1 する。リクエストで `version` を指定した場合は現在値と照合する | 409（後から更新した側） |
 | 利用料モデルの登録・有効化<br>（POST /fee-model、PUT /fee-model/{id}） | 同じ provider_id / consumer_id / data_id の有効なモデルの同時登録・同時有効化 | 部分一意インデックス `uq_fee_model_active`（`is_active = true` の行のみ） | 409 |
 | 取引の事前登録<br>（取引可否確認 API） | 同じ tracking_id での同時実行・再送 | 一意インデックス `uq_transaction_tracking_data`（`tracking_id`, `COALESCE(data_id, '')`）。同じ内容の再送は既存行を返す（冪等） | 別内容は 409。同時実行で一意制約に違反した側は、NP に登録済みの取引を補償キャンセルしたうえで 409 |
-| 取引の状態登録・更新・金額確定<br>（POST・PUT /data-exchange/status、POST /data-exchange/non-fee-model/confirm） | 提供者・利用者の同時報告、同じリクエストの同時再送、L2ログ突合 CronJob の確定処理 | 悲観的ロック。tracking_id 配下の行を `SELECT ... FOR UPDATE`（transaction_id 順）でロックしてから状態を判定・更新し、コミットまで保持する | 後続は先行のコミットを待ち、最新の状態で判定する（確定済み・キャンセル済みは 409、同じ内容の再送は成功し二重に請求確定依頼しない） |
-| L2ログ突合 CronJob の確定・キャンセル | 状態登録・更新 API との同時実行 | CronJob の UPDATE は行ロックを取得し、条件（`settlement_status = 'unsettled'`、`request_date IS NULL` 等）をロック取得後の値で再評価する | API 側が先にロックした場合は API のコミット後の状態で判定する。CronJob が先に確定した場合、API は確定済みとして 409 |
+| 取引の状態登録・更新・金額確定<br>（POST・PUT /data-exchange/status、POST /data-exchange/non-fee-model/confirm） | 提供者・利用者の同時報告、同じリクエストの同時再送、L2ログ突合 CronJob の確定処理 | 悲観的ロック。tracking_id 配下の行を `SELECT ... FOR UPDATE` でロックしてから判定・更新する。ロック待ちは `DB_LOCK_TIMEOUT` 秒（既定 3 秒）まで | 後続は先行のコミットを待ち、最新の状態で判定する。待ちが上限を超えた場合は 503（`Retry-After` 付き） |
+| L2ログ突合 CronJob の確定・請求確定・キャンセル | 状態登録・更新 API との同時実行 | 対象行を行ロック（請求確定・キャンセルは `SELECT ... FOR UPDATE SKIP LOCKED`）し、NP への依頼と更新が終わるまで保持する | API が処理中の行は次回実行で再判定する。CronJob が先にロックした場合、API は CronJob の処理後の状態で判定する |
 | L2ログ突合 CronJob の多重起動 | 前回実行が終わる前の次回起動、手動実行との重複 | CronJob の `concurrencyPolicy: Forbid` に加え、実行中は PostgreSQL の advisory lock（`pg_try_advisory_lock`）を保持する | 後から起動した実行は何もせず終了（NP 請求確定依頼・キャンセル依頼を重複させない） |
-| 決済サービスユーザ登録 | 同じ決済サービス・consumer_id・provider_id の重複登録 | 一意制約 `uq_payment_user_registration` | 重複行は登録できない（本 API からは登録せず、事前登録する） |
 
 
 ## 3. ログ設計
@@ -959,5 +958,6 @@ logger.info(
 | --- | ---------- | --------------------------------------------------------------------------------------------------------- |
 | 1.0 | 2026-02-28 | 第1.0版 |
 | 1.1 | 2026-08-31 | 第1.1版 |
+| 1.2 | 2026-09-30 | 第1.2版 |
 
 ---

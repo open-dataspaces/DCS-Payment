@@ -528,10 +528,11 @@ end
 * 計算済金額(税込) `calculated_amount`（必須・DECIMAL）
 * 消費者データ交換ステータス `consumer_exchange_status`（必須・VARCHAR・pending/completed/failed・DEFAULT 'pending'）
 * 提供者データ交換ステータス `provider_exchange_status`（必須・VARCHAR・pending/completed/failed・DEFAULT 'pending'）
-* L2ログHTTPステータス `l2_http_status`（必須・VARCHAR・pending/HTTPステータスコード・DEFAULT 'pending'）
+* L2ログHTTPステータス `l2_http_status`（必須・VARCHAR・pending/HTTPステータスコード/timeout・DEFAULT 'pending'。2xx を成功とする。timeout は、遡及期間を過ぎても L2 ログで見つからなかったことを示す）
 * 精算決済状態 `settlement_status`（必須・VARCHAR・settled/unsettled/cancelled・DEFAULT 'unsettled'）
 * 注文内容 `order_details`（任意・TEXT）
 * 請求日 `request_date`（任意・TIMESTAMP）
+* データ交換完了日時 `completed_at`（任意・TIMESTAMP・INDEX・支払/請求の期間判定と NP 請求書発行基準日に使用。未設定時は `created_at` で代替）
 * 支払期限 `payment_deadline`（任意・TIMESTAMP）
 * 支払完了日時 `paid_at`（任意・TIMESTAMP）
 * 外部決済サービス固有データ `external_data`（任意・JSONB）
@@ -621,10 +622,11 @@ erDiagram
     DECIMAL calculated_amount "計算済金額(税込)"
     VARCHAR consumer_exchange_status "消費者データ交換ステータス(pending/completed/failed)"
     VARCHAR provider_exchange_status "提供者データ交換ステータス(pending/completed/failed)"
-    VARCHAR l2_http_status "L2ログHTTPステータス(pending/HTTPステータスコード)"
+    VARCHAR l2_http_status "L2ログHTTPステータス(pending/HTTPステータスコード/timeout)"
     VARCHAR settlement_status "精算決済状態(settled/unsettled/cancelled)"
     TEXT order_details "注文内容"
     TIMESTAMP request_date "請求日"
+    TIMESTAMP completed_at "データ交換完了日時"
     TIMESTAMP payment_deadline "支払期限"
     TIMESTAMP paid_at "支払完了日時"
     JSONB external_data "外部決済サービス固有データ"
@@ -670,6 +672,7 @@ erDiagram
 | --- | ---------- | --------------------------------------------------------------------------------------------------------- |
 | 1.0 | 2026-02-28 | 第1.0版 |
 | 1.1 | 2026-08-31 | 第1.1版 |
+| 1.2 | 2026-09-30 | 第1.2版 |
 
 ---
 
