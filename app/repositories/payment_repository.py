@@ -651,12 +651,13 @@ class TransactionRepository:
         end_date: date,
         consumer_exchange_status: Optional[str] = None,
         provider_exchange_status: Optional[str] = None,
-        l2_http_status: Optional[str] = None,
+        l2_succeeded_only: bool = False,
         exclude_settlement_statuses: Optional[List[str]] = None,
     ) -> List[Transaction]:
         """コンシューマーIDとプロバイダーIDと期間で取引一覧を取得
 
         Args:
+            l2_succeeded_only: True の場合、L2 ログ突合で成功（2xx）が確認できた取引のみ
             exclude_settlement_statuses: 除外する settlement_status（例: ['cancelled']）
         """
         logger.debug(
@@ -681,8 +682,8 @@ class TransactionRepository:
             query = query.filter(Transaction.consumer_exchange_status == consumer_exchange_status)
         if provider_exchange_status:
             query = query.filter(Transaction.provider_exchange_status == provider_exchange_status)
-        if l2_http_status:
-            query = query.filter(Transaction.l2_http_status == l2_http_status)
+        if l2_succeeded_only:
+            query = query.filter(Transaction.l2_succeeded())
         if exclude_settlement_statuses:
             query = query.filter(Transaction.settlement_status.notin_(exclude_settlement_statuses))
 

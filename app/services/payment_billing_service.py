@@ -53,7 +53,7 @@ class PaymentBillingService:
 
         # 指定期間のトランザクションを取得（consumer_idとprovider_idで絞り込み）
         # 条件: consumer=completed AND provider=completed AND settlement_status != cancelled
-        #       AND（L2_HTTP_STATUS_FILTER_ENABLED の場合）l2_http_status='200'
+        #       AND（L2_HTTP_STATUS_FILTER_ENABLED の場合）l2_http_status が 2xx
         transactions = self.transaction_repo.list_by_consumer_and_provider(
             consumer_id=consumer_id,
             provider_id=request.provider_id,
@@ -61,7 +61,7 @@ class PaymentBillingService:
             end_date=request.end_date,
             consumer_exchange_status="completed",
             provider_exchange_status="completed",
-            l2_http_status="200" if settings.L2_HTTP_STATUS_FILTER_ENABLED else None,
+            l2_succeeded_only=settings.L2_HTTP_STATUS_FILTER_ENABLED,
             # キャンセル済み（NP取引キャンセル済み）の取引は設定にかかわらず集計に含めない
             exclude_settlement_statuses=["cancelled"],
         )
@@ -134,7 +134,7 @@ class PaymentBillingService:
 
         # 指定期間のトランザクションを取得（provider_idとconsumer_idで絞り込み）
         # 条件: consumer=completed AND provider=completed AND settlement_status != cancelled
-        #       AND（L2_HTTP_STATUS_FILTER_ENABLED の場合）l2_http_status='200'
+        #       AND（L2_HTTP_STATUS_FILTER_ENABLED の場合）l2_http_status が 2xx
         transactions = self.transaction_repo.list_by_consumer_and_provider(
             consumer_id=request.consumer_id,
             provider_id=provider_id,
@@ -142,7 +142,7 @@ class PaymentBillingService:
             end_date=request.end_date,
             consumer_exchange_status="completed",
             provider_exchange_status="completed",
-            l2_http_status="200" if settings.L2_HTTP_STATUS_FILTER_ENABLED else None,
+            l2_succeeded_only=settings.L2_HTTP_STATUS_FILTER_ENABLED,
             # キャンセル済み（NP取引キャンセル済み）の取引は設定にかかわらず集計に含めない
             exclude_settlement_statuses=["cancelled"],
         )

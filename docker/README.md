@@ -173,7 +173,8 @@ docker compose up --build
 | 変数名 | デフォルト値 | 説明 |
 |---|---|---|
 | `EXTERNAL_PAYMENT_ENABLED` | `false` | 外部決済API呼出しの有効/無効 |
-| `L2_HTTP_STATUS_FILTER_ENABLED` | `false`（アプリ既定値は `true`） | 支払/請求予定額に L2ログ突合で成功確認済み（l2_http_status=200）の取引のみ含めるか。L2ログ突合 CronJob を運用する本番環境では `true` にすること。`false` でも settlement_status=cancelled の取引は含めない |
+| `L2_LOG_LOOKBACK_DAYS` | `7`（CronJob） | L2ログ突合 CronJob が pending 取引を照合し続ける最大日数。超過した取引は l2_http_status=timeout となり NP 取引がキャンセルされる |
+| `L2_HTTP_STATUS_FILTER_ENABLED` | `false`（アプリ既定値は `true`） | 支払/請求予定額に L2ログ突合で成功確認済み（l2_http_status が 2xx）の取引のみ含めるか。L2ログ突合 CronJob を運用する本番環境では `true` にすること。`false` でも settlement_status=cancelled の取引は含めない |
 | `NP_KAKEBARAI_BASE_URL` | `http://np-kakebarai-mock-api:8000` | NP掛け払いAPI URL |
 | `NP_KAKEBARAI_SHOP_CODE` | `cbs0138430` | ショップコード |
 | `NP_KAKEBARAI_SP_CODE` | `sp00138430` | SP コード |

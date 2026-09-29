@@ -41,11 +41,23 @@ NP_SHOP_CODE = os.environ.get("NP_KAKEBARAI_SHOP_CODE", "")
 NP_SP_CODE = os.environ.get("NP_KAKEBARAI_SP_CODE", "")
 NP_TERMINAL_ID = os.environ.get("NP_KAKEBARAI_TERMINAL_ID", "")
 
-# JST (UTC+9) で今日と前日を算出
+# L2 ログ突合の最大遡及日数。
+# 未検出のまま（l2_http_status='pending'）この日数を超えた取引は 'timeout' とみなし、
+# NP取引キャンセルの対象にする（未請求・未キャンセルのまま残さない）
+L2_LOG_LOOKBACK_DAYS = int(os.environ.get("L2_LOG_LOOKBACK_DAYS", "7"))
+
+# JST (UTC+9)
 JST = timezone(timedelta(hours=9))
-today = datetime.now(JST).date()
-yesterday = today - timedelta(days=1)
-target_dates = [yesterday, today]
+
+L2_STATUS_TIMEOUT = "timeout"
+
+# L2 ログの statusCode が 2xx のものをデータ交換成功とみなす（200 に限定しない）。
+# アプリ側（Transaction.l2_succeeded()）と同じ判定にすること。
+L2_SUCCESS_SQL = "l2_http_status ~ '^2[0-9]{2}$'"
+
+
+def jst_today():
+    return datetime.now(JST).date()
 
 
 def get_db_connection():
@@ -59,38 +71,95 @@ def get_db_connection():
     )
 
 
-def get_tracking_ids(start_date, end_date):
-    """Transactions テーブルから対象期間の tracking_id を取得（l2_http_status='pending'のみ）"""
-    logger.info("DB から tracking_id を取得中 (%s 〜 %s)", start_date, end_date)
+def get_pending_tracking_ids(today, lookback_days):
+    """L2 ログ突合が必要な tracking_id を取得する
+
+    対象: l2_http_status='pending' かつ tracking_id あり かつ
+          少なくとも一方の当事者がデータ交換を報告済み かつ
+          データ交換完了日時（completed_at、無ければ created_at）が遡及期間内
+    作成日で「前日〜当日」に限定すると、2日を超えて未検出の行が永久に pending のまま
+    残るため、遡及期間内の pending 行はすべて毎回照合する。
+
+    Returns:
+        tuple: (tracking_ids: set, oldest_date: date or None)
+    """
+    lookback_start = today - timedelta(days=lookback_days)
+    logger.info("DB から未照合の tracking_id を取得中 (遡及 %d 日: %s 〜)", lookback_days, lookback_start)
 
     conn = get_db_connection()
     try:
         with conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT DISTINCT tracking_id
+                SELECT tracking_id,
+                       MIN((COALESCE(completed_at, created_at) AT TIME ZONE 'Asia/Tokyo')::date)
                 FROM transactions
-                WHERE created_at >= %s
-                  AND created_at < %s
-                  AND tracking_id IS NOT NULL
+                WHERE tracking_id IS NOT NULL
                   AND l2_http_status = 'pending'
                   -- 取引可否APIで事前登録しただけ（両当事者とも未報告）の行は
                   -- データ交換が未実施のため L2 ログ突合の対象外
                   AND NOT (consumer_exchange_status = 'pending'
                            AND provider_exchange_status = 'pending')
+                  AND COALESCE(completed_at, created_at) >= %s
+                GROUP BY tracking_id
                 """,
-                (
-                    datetime.combine(start_date, datetime.min.time()),
-                    datetime.combine(end_date + timedelta(days=1), datetime.min.time()),
-                ),
+                (datetime.combine(lookback_start, datetime.min.time(), tzinfo=JST),),
             )
             rows = cur.fetchall()
             tracking_ids = {row[0] for row in rows}
-            logger.info("DB から %d 件の tracking_id を取得", len(tracking_ids))
-            return tracking_ids
+            oldest = min((row[1] for row in rows), default=None)
+            logger.info("DB から %d 件の tracking_id を取得 (最古: %s)", len(tracking_ids), oldest)
+            return tracking_ids, oldest
     finally:
         conn.close()
         logger.debug("DB 接続クローズ")
+
+
+def mark_timed_out_transactions(today, lookback_days):
+    """遡及期間を超えても L2 ログで未検出の取引を 'timeout' に更新する
+
+    'timeout' は 2xx 以外のステータスとして扱われ、後続のキャンセル処理で
+    NP取引がキャンセルされ settlement_status='cancelled' になる。
+    """
+    lookback_start = today - timedelta(days=lookback_days)
+    conn = get_db_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE transactions
+                SET l2_http_status = %s, updated_at = NOW()
+                WHERE tracking_id IS NOT NULL
+                  AND l2_http_status = 'pending'
+                  AND NOT (consumer_exchange_status = 'pending'
+                           AND provider_exchange_status = 'pending')
+                  AND COALESCE(completed_at, created_at) < %s
+                """,
+                (L2_STATUS_TIMEOUT, datetime.combine(lookback_start, datetime.min.time(), tzinfo=JST)),
+            )
+            count = cur.rowcount
+        conn.commit()
+        if count:
+            logger.warning(
+                "L2 ログ未検出のまま %d 日を超えた取引を '%s' に更新: %d 件（後続でNP取引キャンセル）",
+                lookback_days, L2_STATUS_TIMEOUT, count,
+            )
+        else:
+            logger.info("L2 ログ未検出タイムアウト対象: なし")
+        return count
+    except Exception:
+        conn.rollback()
+        logger.exception("timeout 更新中にエラーが発生")
+        raise
+    finally:
+        conn.close()
+        logger.debug("DB 接続クローズ")
+
+
+def build_target_dates(oldest_date, today):
+    """S3 ログを読む日付の一覧（最古の取引日〜当日）"""
+    start = oldest_date if oldest_date and oldest_date < today else today - timedelta(days=1)
+    return [start + timedelta(days=i) for i in range((today - start).days + 1)]
 
 
 def update_l2_http_status(found_map, not_found):
@@ -151,7 +220,7 @@ def update_l2_http_status(found_map, not_found):
 def update_settlement_status():
     """settlement_status を更新
 
-    確定条件（l2_http_status='200' AND consumer_exchange_status='completed'
+    確定条件（l2_http_status が 2xx AND consumer_exchange_status='completed'
     AND provider_exchange_status='completed'）を満たすレコードを 'settled' に更新する。
     """
     logger.info("=== settlement_status 更新処理 開始 ===")
@@ -160,11 +229,11 @@ def update_settlement_status():
     try:
         with conn.cursor() as cur:
             cur.execute(
-                """
+                f"""
                 UPDATE transactions
                 SET settlement_status = 'settled', updated_at = NOW()
                 WHERE settlement_status = 'unsettled'
-                  AND l2_http_status = '200'
+                  AND {L2_SUCCESS_SQL}
                   AND consumer_exchange_status = 'completed'
                   AND provider_exchange_status = 'completed'
                 """,
@@ -488,6 +557,81 @@ def get_stale_pre_registered_transactions():
         logger.debug("DB 接続クローズ")
 
 
+def get_unmatched_report_transactions(today, lookback_days):
+    """当事者の報告が揃わず確定できない未精算取引の外部取引IDを取得する
+
+    L2 ログ・提供者・利用者の 3 つがすべて成功の場合のみ確定（settled）とするため、
+    次の取引は確定できない。請求せずに NP 取引をキャンセルする。
+      - 一方の当事者でも failed を報告した取引（failed → completed には戻せないため確定不能）
+      - 一方の当事者が completed、他方が pending のまま遡及期間を超えた取引
+    L2 ステータスが 2xx 以外（timeout 含む）の取引は「L2ステータス異常」でキャンセルするため除く。
+    """
+    lookback_start = today - timedelta(days=lookback_days)
+    logger.info("当事者報告が不一致・未報告の未精算レコードを取得中")
+
+    conn = get_db_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                f"""
+                SELECT DISTINCT external_transaction_id
+                FROM transactions
+                WHERE external_transaction_id IS NOT NULL
+                  AND settlement_status = 'unsettled'
+                  AND request_date IS NULL
+                  AND (l2_http_status = 'pending' OR {L2_SUCCESS_SQL})
+                  AND (
+                        consumer_exchange_status = 'failed'
+                     OR provider_exchange_status = 'failed'
+                     OR (NOT (consumer_exchange_status = 'pending'
+                              AND provider_exchange_status = 'pending')
+                         AND NOT (consumer_exchange_status = 'completed'
+                                  AND provider_exchange_status = 'completed')
+                         AND COALESCE(completed_at, created_at) < %s)
+                  )
+                """,
+                (datetime.combine(lookback_start, datetime.min.time(), tzinfo=JST),),
+            )
+            rows = cur.fetchall()
+            np_transaction_ids = [row[0] for row in rows if row[0]]
+            logger.info("当事者報告が不一致・未報告の未精算レコード: %d 件", len(np_transaction_ids))
+            return np_transaction_ids
+    finally:
+        conn.close()
+        logger.debug("DB 接続クローズ")
+
+
+def cancel_and_mark(np_transaction_ids, reason):
+    """NP取引をキャンセルし、NP側でキャンセルに成功した取引のみ 'cancelled' に更新する
+
+    失敗分は 'unsettled' のまま残し次回 cron で再試行する。
+    """
+    if not np_transaction_ids:
+        logger.info("取引キャンセル対象（%s）: なし", reason)
+        return
+    logger.info("取引キャンセル対象（%s）: %d 件", reason, len(np_transaction_ids))
+    for nid in np_transaction_ids:
+        logger.info("  キャンセル対象（%s）: ext_txn_id=%s", reason, nid)
+    cancelled_ids = cancel_np_transactions(np_transaction_ids)
+
+    conn = get_db_connection()
+    try:
+        with conn.cursor() as cur:
+            updated = mark_cancelled(cur, cancelled_ids)
+        conn.commit()
+        logger.info(
+            "settlement_status を 'cancelled' に更新（%s）: %d 件 (キャンセル失敗 %d 件)",
+            reason, updated, len(np_transaction_ids) - len(cancelled_ids),
+        )
+    except Exception:
+        conn.rollback()
+        logger.exception("settlement_status の更新中にエラーが発生（%s）", reason)
+        raise
+    finally:
+        conn.close()
+        logger.debug("DB 接続クローズ")
+
+
 def mark_cancelled(cur, external_transaction_ids):
     """NP側でキャンセル済みの取引の settlement_status を 'cancelled' に更新する"""
     if not external_transaction_ids:
@@ -504,8 +648,10 @@ def mark_cancelled(cur, external_transaction_ids):
     return cur.rowcount
 
 
-def process_billing_and_cancellation():
+def process_billing_and_cancellation(today=None, lookback_days=None):
     """l2_http_statusの更新後、請求確定/キャンセルを実行"""
+    today = today or jst_today()
+    lookback_days = L2_LOG_LOOKBACK_DAYS if lookback_days is None else lookback_days
     logger.info("=== 請求確定/キャンセル処理 開始 ===")
 
     conn = get_db_connection()
@@ -531,17 +677,19 @@ def process_billing_and_cancellation():
                     rec[0], rec[1], rec[2], rec[3], rec[4], rec[5], rec[6],
                 )
 
-            # 1. 請求確定対象: l2_http_status=200 かつ 両方completed
+            # 1. 請求確定対象: l2_http_status が 2xx かつ 両方completed
+            #    （キャンセル済みの取引は、後から当事者が completed を報告しても請求しない）
             cur.execute(
-                """
+                f"""
                 SELECT DISTINCT external_transaction_id,
                        COALESCE(completed_at, created_at) AS completed_at
                 FROM transactions
-                WHERE l2_http_status = '200'
+                WHERE {L2_SUCCESS_SQL}
                   AND consumer_exchange_status = 'completed'
                   AND provider_exchange_status = 'completed'
                   AND external_transaction_id IS NOT NULL
                   AND request_date IS NULL
+                  AND settlement_status != 'cancelled'
                 """,
             )
             billing_records = [(row[0], row[1]) for row in cur.fetchall() if row[0]]
@@ -568,14 +716,14 @@ def process_billing_and_cancellation():
             else:
                 logger.info("請求確定依頼対象: なし")
 
-            # 2. キャンセル対象: l2_http_status が 200以外（かつpending以外）で未精算のもの
+            # 2. キャンセル対象: l2_http_status が 2xx以外（かつpending以外）で未精算のもの
             #    （既に cancelled のものを毎回再キャンセル依頼しないよう settlement_status で絞る）
             cur.execute(
-                """
+                f"""
                 SELECT DISTINCT external_transaction_id
                 FROM transactions
                 WHERE l2_http_status != 'pending'
-                  AND l2_http_status != '200'
+                  AND NOT {L2_SUCCESS_SQL}
                   AND external_transaction_id IS NOT NULL
                   AND settlement_status = 'unsettled'
                 """,
@@ -602,47 +750,29 @@ def process_billing_and_cancellation():
         conn.close()
         logger.debug("DB 接続クローズ")
 
-    # 3. キャンセル対象: tracking_id=NULLで24時間経過かつexchange未完了
-    stale_ids = get_stale_pre_registered_transactions()
-    if stale_ids:
-        logger.info("取引キャンセル対象（24時間経過・未完了）: %d 件", len(stale_ids))
-        for sid in stale_ids:
-            logger.info("  キャンセル対象（stale）: ext_txn_id=%s", sid)
-        cancelled_ids = cancel_np_transactions(stale_ids)
-        # NP側でキャンセルに成功した取引のみ settlement_status を更新
-        conn = get_db_connection()
-        try:
-            with conn.cursor() as cur:
-                updated = mark_cancelled(cur, cancelled_ids)
-            conn.commit()
-            logger.info(
-                "settlement_status を 'cancelled' に更新（24時間経過）: %d 件 (キャンセル失敗 %d 件)",
-                updated, len(stale_ids) - len(cancelled_ids),
-            )
-        except Exception:
-            conn.rollback()
-            logger.exception("settlement_status の更新中にエラーが発生（stale）")
-            raise
-        finally:
-            conn.close()
-            logger.debug("DB 接続クローズ")
-    else:
-        logger.info("取引キャンセル対象（24時間経過・未完了）: なし")
+    # 3. キャンセル対象: 事前登録のまま24時間経過（両当事者とも未報告）
+    cancel_and_mark(get_stale_pre_registered_transactions(), "24時間経過・未完了")
+
+    # 4. キャンセル対象: 当事者の一方が failed、または片方未報告のまま遡及期間を超過
+    cancel_and_mark(get_unmatched_report_transactions(today, lookback_days), "当事者報告の不一致・未報告")
 
     logger.info("=== 請求確定/キャンセル処理 完了 ===")
 
 
 def main():
+    today = jst_today()
     logger.info("=== CronJob 開始 ===")
     logger.info("対象バケット: %s / プレフィックス: %s", bucket, prefix)
-    logger.info("対象日付: %s, %s (JST)", yesterday, today)
+    logger.info("当日: %s (JST) / L2ログ遡及日数: %d", today, L2_LOG_LOOKBACK_DAYS)
 
-    # 1. DB から tracking_id を取得
-    tracking_ids = get_tracking_ids(yesterday, today)
+    # 1. DB から未照合の tracking_id を取得（遡及期間内の pending 行すべて）
+    tracking_ids, oldest_date = get_pending_tracking_ids(today, L2_LOG_LOOKBACK_DAYS)
     if not tracking_ids:
         logger.info("対象の tracking_id がありません。L2ログチェックをスキップします。")
     else:
-        # 2. S3 からログを取得
+        # 2. S3 からログを取得（最古の取引日〜当日）
+        target_dates = build_target_dates(oldest_date, today)
+        logger.info("対象日付: %s 〜 %s (%d 日分)", target_dates[0], target_dates[-1], len(target_dates))
         s3 = boto3.client("s3")
         log_lines = collect_logs_from_s3(s3, target_dates)
 
@@ -656,11 +786,14 @@ def main():
         logger.info("  ログに存在:       %d", len(found_map))
         logger.info("  ログに未検出:     %d", len(not_found))
 
-    # 5. settlement_status を更新（確定条件を満たすレコードを 'settled' に）
+    # 5. 遡及期間を超えて未検出の取引を 'timeout' に更新（後続でキャンセル）
+    mark_timed_out_transactions(today, L2_LOG_LOOKBACK_DAYS)
+
+    # 6. settlement_status を更新（確定条件を満たすレコードを 'settled' に）
     update_settlement_status()
 
-    # 6. 請求確定/キャンセル処理
-    process_billing_and_cancellation()
+    # 7. 請求確定/キャンセル処理
+    process_billing_and_cancellation(today, L2_LOG_LOOKBACK_DAYS)
 
 
 if __name__ == "__main__":

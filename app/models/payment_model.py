@@ -747,6 +747,14 @@ class Transaction(Base):
         """期間判定用のデータ交換完了日時（completed_at 未設定の既存行は created_at）"""
         return func.coalesce(cls.completed_at, cls.created_at)
 
+    @classmethod
+    def l2_succeeded(cls):
+        """L2 ログ突合で成功が確認できた取引（statusCode が 2xx）
+
+        CronJob（cronjob/src/check_l2log.py の L2_SUCCESS_SQL）と同じ判定にすること。
+        """
+        return cls.l2_http_status.op("~")(r"^2[0-9]{2}$")
+
     @property
     def completed_at_or_created_at(self):
         return self.completed_at or self.created_at

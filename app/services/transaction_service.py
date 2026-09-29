@@ -757,6 +757,20 @@ class TransactionService:
                             message=f"Status mismatch: existing={current_status}, new={new_status}. Cannot change from failed to completed.",
                             resource="Transaction"
                         )
+                    if current_status == "pending" and record.settlement_status != "unsettled":
+                        # キャンセル済み（事前登録のまま24時間経過など）の取引に後から報告されても
+                        # NP 側の取引は既に無いため受け付けない
+                        logger.warning(
+                            "Transaction already settled or cancelled",
+                            tracking_id=str(tracking_id),
+                            data_id=record.data_id,
+                            settlement_status=record.settlement_status,
+                            operator_id=operator_id
+                        )
+                        raise ResourceConflictError(
+                            message=f"Transaction is already {record.settlement_status}: tracking_id={tracking_id}, data_id={record.data_id}",
+                            resource="Transaction"
+                        )
                     if current_status == "pending":
                         setattr(record, target_column, new_status)
                         if new_status == "completed":
@@ -1003,6 +1017,23 @@ class TransactionService:
                     )
                     raise ResourceConflictError(
                         message=f"Status mismatch: existing={old_status}, new={new_status}. Cannot change from failed to completed.",
+                        resource="Transaction"
+                    )
+                # 確定済み（請求確定済み）・キャンセル済みの取引は状態を変更しない。
+                # 例えば settled 後に failed へ変更すると、請求済みなのに交換失敗となり矛盾する。
+                if old_status != new_status and transaction.settlement_status != "unsettled":
+                    logger.warning(
+                        "Transaction already settled or cancelled",
+                        tracking_id=str(tracking_id),
+                        data_id=transaction.data_id,
+                        settlement_status=transaction.settlement_status,
+                        column=target_column,
+                        existing_status=old_status,
+                        new_status=new_status,
+                        operator_id=operator_id
+                    )
+                    raise ResourceConflictError(
+                        message=f"Transaction is already {transaction.settlement_status}: tracking_id={tracking_id}, data_id={transaction.data_id}",
                         resource="Transaction"
                     )
                 setattr(transaction, target_column, new_status)
@@ -1274,6 +1305,19 @@ class TransactionService:
                 billing_payment_service_id = (
                     stored_service_ids.pop() if len(stored_service_ids) == 1 else str(request.payment_service_id)
                 )
+
+                # キャンセル済み（事前登録のまま24時間経過など）の取引は NP 側に取引が無いため確定しない
+                cancelled = [r for r in pre_registered if r.settlement_status == "cancelled"]
+                if cancelled:
+                    logger.warning(
+                        "Pre-registered transaction already cancelled",
+                        tracking_id=str(tracking_id),
+                        cancelled_count=len(cancelled),
+                    )
+                    raise ResourceConflictError(
+                        message=f"Transaction is already cancelled: tracking_id={tracking_id}",
+                        resource="Transaction",
+                    )
 
                 # 既に確定済み（再送）の場合は再登録・再請求せず成功を返す（冪等）
                 if all(
