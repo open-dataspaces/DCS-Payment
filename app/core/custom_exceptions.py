@@ -4,6 +4,7 @@ Custom Exceptions - カスタム例外定義
 アプリケーション固有の例外を定義し、外部ライブラリの例外を隠蔽
 """
 
+import logging
 from typing import Optional, Any
 
 # ========================================
@@ -293,9 +294,12 @@ def wrap_database_error(func):
         except SQLIntegrityError as e:
             # 一意制約違反など
             if "unique" in str(e.orig).lower():
+                # DB のエラーメッセージ（制約名・キーの値）はクライアントに返さず、ログにだけ出す
+                logging.getLogger(__name__).warning("Unique constraint violation: %s", e.orig)
                 raise DuplicateRecordError(
                     entity="Record",
-                    message=f"Record already exists: {str(e.orig)}"
+                    message="Record already exists",
+                    details={"db_error": str(e.orig)},
                 )
             else:
                 raise IntegrityError(

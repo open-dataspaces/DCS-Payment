@@ -11,9 +11,11 @@ from uuid import UUID
 
 from sqlalchemy.exc import IntegrityError as SQLIntegrityError
 from sqlalchemy.orm import Session
+from sqlalchemy.orm.exc import StaleDataError
 
 from app.core.custom_exceptions import (
     DuplicateRecordError,
+    OptimisticLockError,
     RecordNotFoundError,
     wrap_database_error,
 )
@@ -196,14 +198,35 @@ class FeeModelRepository:
     @wrap_database_error
     def update(self, fee_model: FeeModel) -> FeeModel:
         """利用料モデルを更新"""
+        expected_version = fee_model.version
         logger.debug(
             "Updating fee model",
             fee_model_id=str(fee_model.fee_model_id),
-            version=fee_model.version
+            version=expected_version
         )
-        
-        self.db.flush()
-        
+
+        try:
+            self.db.flush()
+        except StaleDataError:
+            # version_id_col による楽観的ロック失敗（他のトランザクションが先に更新済み）
+            self.db.rollback()
+            actual_version = (
+                self.db.query(FeeModel.version)
+                .filter(FeeModel.fee_model_id == fee_model.fee_model_id)
+                .scalar()
+            )
+            logger.warning(
+                "Optimistic lock failed - fee model was modified concurrently",
+                fee_model_id=str(fee_model.fee_model_id),
+                expected_version=expected_version,
+                actual_version=actual_version,
+            )
+            raise OptimisticLockError(
+                entity="fee_model",
+                expected_version=expected_version,
+                actual_version=actual_version if actual_version is not None else -1,
+            )
+
         logger.info(
             "Fee model updated successfully",
             fee_model_id=str(fee_model.fee_model_id),
@@ -461,15 +484,25 @@ class TransactionRepository:
         return transaction
 
     @wrap_database_error
-    def get_all_by_tracking_id(self, tracking_id: UUID) -> List[Transaction]:
-        """トラッキングIDで全ての取引を取得"""
-        logger.debug("Fetching all transactions by tracking ID", tracking_id=str(tracking_id))
+    def get_all_by_tracking_id(self, tracking_id: UUID, for_update: bool = False) -> List[Transaction]:
+        """トラッキングIDで全ての取引を取得
 
-        transactions = (
-            self.db.query(Transaction)
-            .filter(Transaction.tracking_id == tracking_id)
-            .all()
+        Args:
+            for_update: True の場合、SELECT ... FOR UPDATE で行ロックを取得する。
+                状態の判定と更新の間に他のリクエストや CronJob が同じ行を変更しないよう、
+                状態を更新する処理で使用する（ロックはコミット/ロールバックまで保持）。
+        """
+        logger.debug(
+            "Fetching all transactions by tracking ID",
+            tracking_id=str(tracking_id),
+            for_update=for_update,
         )
+
+        query = self.db.query(Transaction).filter(Transaction.tracking_id == tracking_id)
+        if for_update:
+            # ロック順序を固定してデッドロックを避ける
+            query = query.order_by(Transaction.transaction_id).with_for_update()
+        transactions = query.all()
 
         logger.debug(
             "Transactions found",

@@ -187,6 +187,10 @@ class FeeModel(Base):
         comment="更新日時"
     )
 
+    # 楽観的ロック: UPDATE 時に WHERE version = <読込時の値> を付与し、
+    # 同時更新が起きた場合は StaleDataError となる（version は自動で +1 される）
+    __mapper_args__ = {"version_id_col": version}
+
     # Constraints
     __table_args__ = (
         # アクティブなモデルの一意性制約

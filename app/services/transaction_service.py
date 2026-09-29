@@ -684,7 +684,8 @@ class TransactionService:
 
         try:
             tracking_id = UUID(request.tracking_id)
-            existing_records = self.transaction_repo.get_all_by_tracking_id(tracking_id)
+            # 提供者・利用者の同時報告や CronJob の確定処理と競合しないよう行ロックを取得する
+            existing_records = self.transaction_repo.get_all_by_tracking_id(tracking_id, for_update=True)
 
             # 既存レコードがある場合（取引可否APIによる事前登録、または2番目の登録者）
             if existing_records:
@@ -972,7 +973,8 @@ class TransactionService:
 
         try:
             tracking_id = UUID(request.tracking_id)
-            transactions = self.transaction_repo.get_all_by_tracking_id(tracking_id)
+            # 確定済み判定と更新の間に CronJob が確定しないよう行ロックを取得する
+            transactions = self.transaction_repo.get_all_by_tracking_id(tracking_id, for_update=True)
 
             if not transactions:
                 raise RecordNotFoundError(
@@ -1284,8 +1286,9 @@ class TransactionService:
         billed_external_ids: list[str] = []
         try:
             # 取引可否確認API（利用料モデルなし）で事前登録されたレコードを tracking_id で検索
+            # 再送が同時に届いても二重に請求確定依頼しないよう行ロックを取得する
             pre_registered = [
-                r for r in self.transaction_repo.get_all_by_tracking_id(tracking_id)
+                r for r in self.transaction_repo.get_all_by_tracking_id(tracking_id, for_update=True)
                 if r.data_id is None
             ]
 

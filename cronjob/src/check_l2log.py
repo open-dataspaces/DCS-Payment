@@ -55,6 +55,9 @@ L2_STATUS_TIMEOUT = "timeout"
 # アプリ側（Transaction.l2_succeeded()）と同じ判定にすること。
 L2_SUCCESS_SQL = "l2_http_status ~ '^2[0-9]{2}$'"
 
+# 多重起動防止用の advisory lock キー（本 CronJob 固有の固定値）
+CRON_ADVISORY_LOCK_KEY = 7_320_001
+
 
 def jst_today():
     return datetime.now(JST).date()
@@ -69,6 +72,27 @@ def get_db_connection():
         user=DB_USER,
         password=DB_PASSWORD,
     )
+
+
+def acquire_run_lock():
+    """CronJob の多重起動を防ぐ PostgreSQL advisory lock を取得する
+
+    同時に実行されると NP 請求確定依頼・キャンセル依頼が重複するため、
+    CronJob の concurrencyPolicy: Forbid に加えて DB でも排他する。
+    ロックはセッション単位のため、返した接続を閉じるまで保持される。
+
+    Returns:
+        ロックを保持した接続。他の実行がロック中の場合は None。
+    """
+    conn = get_db_connection()
+    conn.autocommit = True
+    with conn.cursor() as cur:
+        cur.execute("SELECT pg_try_advisory_lock(%s)", (CRON_ADVISORY_LOCK_KEY,))
+        acquired = cur.fetchone()[0]
+    if not acquired:
+        conn.close()
+        return None
+    return conn
 
 
 def get_pending_tracking_ids(today, lookback_days):
@@ -760,7 +784,17 @@ def process_billing_and_cancellation(today=None, lookback_days=None):
 
 
 def main():
-    today = jst_today()
+    lock_conn = acquire_run_lock()
+    if lock_conn is None:
+        logger.warning("別の CronJob が実行中のため、今回の実行はスキップします")
+        return
+    try:
+        run(jst_today())
+    finally:
+        lock_conn.close()
+
+
+def run(today):
     logger.info("=== CronJob 開始 ===")
     logger.info("対象バケット: %s / プレフィックス: %s", bucket, prefix)
     logger.info("当日: %s (JST) / L2ログ遡及日数: %d", today, L2_LOG_LOOKBACK_DAYS)

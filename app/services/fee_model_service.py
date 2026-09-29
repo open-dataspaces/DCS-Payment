@@ -315,9 +315,8 @@ class FeeModelService:
                         rule="amount_range"
                     )
 
-            # バージョンをインクリメント
-            fee_model.version += 1
-
+            # バージョンは version_id_col により UPDATE 時に自動でインクリメントされる。
+            # 同時更新で読込時の version と一致しない場合は OptimisticLockError となる。
             fee_model = self.fee_model_repo.update(fee_model)
             self.db.commit()
 

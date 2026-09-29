@@ -407,7 +407,9 @@ async def update_fee_model(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=str(e)
         )
-    except (OptimisticLockError, ResourceConflictError) as e:
+    except (OptimisticLockError, ResourceConflictError, DuplicateRecordError) as e:
+        # DuplicateRecordError: 同時に同じ識別子のモデルを有効化し、一意インデックス
+        # （uq_fee_model_active）に違反した場合
         logger.warning(
             "Request failed - resource conflict",
             fee_model_id=str(uuid_id),

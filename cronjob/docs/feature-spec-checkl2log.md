@@ -30,7 +30,7 @@
 |------|------|
 | 送信トリガー | CronJobによる定期実行 |
 | 実行間隔 | CronJob の `schedule` で設定する（日次に限定しない）。L2 ログは S3 に時間単位のファイル（例: 20260208-11-0.gz）で格納されるため、それより短い間隔で実行しても確定は早まらない |
-| 多重起動 | 禁止。CronJob の `concurrencyPolicy: Forbid` を設定すること（同時実行すると NP 請求確定依頼・キャンセル依頼が重複するおそれがある） |
+| 多重起動 | 禁止。CronJob の `concurrencyPolicy: Forbid` を設定すること（同時実行すると NP 請求確定依頼・キャンセル依頼が重複するおそれがある）。加えて PostgreSQL の advisory lock を実行中保持し、ロックを取得できない実行は何もせず終了する |
 
 L2 ログの S3 格納を前提とするため、確定はリアルタイムではなく、L2 ログが格納された後の次回実行時となる。
 支払/請求予定額 API は、確定前の取引も `settlement_status=unsettled` として返す（`L2_HTTP_STATUS_FILTER_ENABLED=false` の場合）。

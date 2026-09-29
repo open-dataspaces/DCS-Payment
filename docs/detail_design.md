@@ -808,6 +808,20 @@ CREATE INDEX ix_transaction_request_date ON transactions(request_date);
 | fee_model_history | transactions | 1:N | fee_model_history_id | RESTRICT |
 | payment_service_user_registrations | transactions | 1:N | payment_service_user_id | RESTRICT |
 
+### 2.3 排他制御
+
+トランザクション分離レベルは PostgreSQL の既定（READ COMMITTED）とし、競合する処理ごとに以下の方式で排他する。
+
+| 対象 | 競合するケース | 方式 | 競合時の動作 |
+| --- | --- | --- | --- |
+| 利用料モデルの更新<br>（PUT /fee-model/{id}） | 同じ利用料モデルの同時更新・削除 | 楽観的ロック。`version` 列を UPDATE 時の条件（`WHERE version = 読込時の値`）に含め、更新のたびに +1 する。リクエストで `version` を指定した場合は現在値と照合する | 409（後から更新した側） |
+| 利用料モデルの登録・有効化<br>（POST /fee-model、PUT /fee-model/{id}） | 同じ provider_id / consumer_id / data_id の有効なモデルの同時登録・同時有効化 | 部分一意インデックス `uq_fee_model_active`（`is_active = true` の行のみ） | 409 |
+| 取引の事前登録<br>（取引可否確認 API） | 同じ tracking_id での同時実行・再送 | 一意インデックス `uq_transaction_tracking_data`（`tracking_id`, `COALESCE(data_id, '')`）。同じ内容の再送は既存行を返す（冪等） | 別内容は 409。同時実行で一意制約に違反した側は、NP に登録済みの取引を補償キャンセルしたうえで 409 |
+| 取引の状態登録・更新・金額確定<br>（POST・PUT /data-exchange/status、POST /data-exchange/non-fee-model/confirm） | 提供者・利用者の同時報告、同じリクエストの同時再送、L2ログ突合 CronJob の確定処理 | 悲観的ロック。tracking_id 配下の行を `SELECT ... FOR UPDATE`（transaction_id 順）でロックしてから状態を判定・更新し、コミットまで保持する | 後続は先行のコミットを待ち、最新の状態で判定する（確定済み・キャンセル済みは 409、同じ内容の再送は成功し二重に請求確定依頼しない） |
+| L2ログ突合 CronJob の確定・キャンセル | 状態登録・更新 API との同時実行 | CronJob の UPDATE は行ロックを取得し、条件（`settlement_status = 'unsettled'`、`request_date IS NULL` 等）をロック取得後の値で再評価する | API 側が先にロックした場合は API のコミット後の状態で判定する。CronJob が先に確定した場合、API は確定済みとして 409 |
+| L2ログ突合 CronJob の多重起動 | 前回実行が終わる前の次回起動、手動実行との重複 | CronJob の `concurrencyPolicy: Forbid` に加え、実行中は PostgreSQL の advisory lock（`pg_try_advisory_lock`）を保持する | 後から起動した実行は何もせず終了（NP 請求確定依頼・キャンセル依頼を重複させない） |
+| 決済サービスユーザ登録 | 同じ決済サービス・consumer_id・provider_id の重複登録 | 一意制約 `uq_payment_user_registration` | 重複行は登録できない（本 API からは登録せず、事前登録する） |
+
 
 ## 3. ログ設計
 
