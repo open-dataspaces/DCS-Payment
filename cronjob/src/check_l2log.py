@@ -786,13 +786,13 @@ def process_billing_and_cancellation(today=None, lookback_days=None):
             rows = cur.fetchall()
             # 依頼順（1 件ずつの切り分け・ログの順序）を実行ごとに変えないよう ID 順にする。
             # 空文字の NP 取引ID は依頼しない（NP に一括依頼ごと拒否される）
-            billing_records = sorted({(row[1], row[2]) for row in rows if row[1]})
+            bill_records = sorted({(row[1], row[2]) for row in rows if row[1]})
 
-            if billing_records:
-                logger.info("請求確定依頼対象: %d 件", len(billing_records))
-                for ext_id, bill_date in billing_records:
+            if bill_records:
+                logger.info("請求確定依頼対象: %d 件", len(bill_records))
+                for ext_id, bill_date in bill_records:
                     logger.info("  請求確定対象: ext_txn_id=%s, bill_issue_base_date=%s", ext_id, bill_date)
-                billed = request_np_billing(billing_records)
+                billed = request_np_billing(bill_records)
                 if billed:
                     # 請求確定に成功した取引のみ request_date を更新して再請求を防止
                     billed_ids = {rec[0] for rec in billed}
