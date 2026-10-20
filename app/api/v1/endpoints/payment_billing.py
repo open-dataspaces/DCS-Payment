@@ -1,5 +1,3 @@
-from uuid import uuid4
-
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
@@ -44,7 +42,7 @@ router = APIRouter()
         status.HTTP_500_INTERNAL_SERVER_ERROR: {"description": "サーバエラー", "model": ErrorResponse},
     }
 )
-async def get_payment_schedule(
+def get_payment_schedule(
     request: PaymentScheduleRequest,
     headers: dict = Depends(verify_request_headers),
     credential: dict = Depends(verify_access_token),
@@ -52,7 +50,7 @@ async def get_payment_schedule(
     db: Session = Depends(get_db),
 ) -> PaymentAmountListResponse:
     """支払予定額を取得"""
-    request_id = headers.get('x-trackingId') or str(uuid4())
+    request_id = headers["x_tracking_id"]
     set_request_id(request_id)
 
     # アクセストークン内のoperator_idをconsumer_idとして使用
@@ -125,7 +123,7 @@ async def get_payment_schedule(
         status.HTTP_500_INTERNAL_SERVER_ERROR: {"description": "サーバエラー", "model": ErrorResponse},
     }
 )
-async def get_billing_schedule(
+def get_billing_schedule(
     request: BillingScheduleRequest,
     headers: dict = Depends(verify_request_headers),
     credential: dict = Depends(verify_access_token),
@@ -133,7 +131,7 @@ async def get_billing_schedule(
     db: Session = Depends(get_db),
 ) -> BillingAmountListResponse:
     """請求予定額を取得"""
-    request_id = headers.get('x-trackingId') or str(uuid4())
+    request_id = headers["x_tracking_id"]
     set_request_id(request_id)
 
     # アクセストークン内のoperator_idをprovider_idとして使用

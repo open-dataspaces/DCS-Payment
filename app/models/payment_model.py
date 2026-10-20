@@ -8,6 +8,7 @@ from uuid import uuid4
 from datetime import datetime, timezone
 
 from sqlalchemy import (
+    event,
     Boolean,
     CheckConstraint,
     Column,
@@ -21,8 +22,8 @@ from sqlalchemy import (
     UniqueConstraint,
 )
 from sqlalchemy.dialects.postgresql import JSONB, UUID as PG_UUID
-from sqlalchemy.orm import relationship
-from sqlalchemy.sql import func
+from sqlalchemy.orm import Session, relationship
+from sqlalchemy.sql import func, text
 
 from app.models.base import Base
 
@@ -187,6 +188,12 @@ class FeeModel(Base):
         comment="更新日時"
     )
 
+    # 楽観的ロック: UPDATE/DELETE 時に WHERE version = <読込時の値> を付与し、
+    # 同時更新が起きた場合は StaleDataError となる。
+    # 登録時はクライアントが指定した version をそのまま保存するため自動採番は使わず、
+    # 更新時の +1 は下の before_flush（_increment_fee_model_version）で行う
+    __mapper_args__ = {"version_id_col": version, "version_id_generator": False}
+
     # Constraints
     __table_args__ = (
         # アクティブなモデルの一意性制約
@@ -253,6 +260,14 @@ class FeeModel(Base):
             f"version={self.version}, "
             f"is_active={self.is_active})>"
         )
+
+
+@event.listens_for(Session, "before_flush")
+def _increment_fee_model_version(session, flush_context, instances):
+    """変更された利用料モデルを UPDATE するときに version を +1 する（どの更新経路でも同じ）"""
+    for obj in session.dirty:
+        if isinstance(obj, FeeModel) and session.is_modified(obj, include_collections=False):
+            obj.version = obj.version + 1
 
 
 class FeeModelHistory(Base):
@@ -393,9 +408,12 @@ class FeeModelHistory(Base):
         "FeeModel",
         back_populates="history_records"
     )
+    # 履歴の削除時に ORM が取引の fee_model_history_id を NULL に書き換えないようにする
+    # （DB の ON DELETE RESTRICT で、取引から参照されている履歴の削除を拒否させる）
     transactions = relationship(
         "Transaction",
-        back_populates="fee_model_history"
+        back_populates="fee_model_history",
+        passive_deletes="all",
     )
 
     def __repr__(self):
@@ -645,6 +663,11 @@ class Transaction(Base):
         index=True,
         comment="外部精算決済状態(settled/unsettled/cancelled)"
     )
+    completed_at = Column(
+        DateTime(timezone=True),
+        nullable=True,
+        comment="データ交換完了日時（状態登録/確定APIで受け取った completed_at。支払/請求の期間判定に使用）"
+    )
     order_details = Column(
         Text,
         nullable=True,
@@ -715,6 +738,21 @@ class Transaction(Base):
             "ix_transaction_request_date",
             "request_date"
         ),
+        # 同一 tracking_id 配下で data_id は一意（利用料モデル無しは data_id=NULL を '' として扱う）
+        # 取引の二重紐付け・二重登録を DB で防ぐ
+        Index(
+            "uq_transaction_tracking_data",
+            "tracking_id",
+            text("COALESCE(data_id, '')"),
+            unique=True,
+            postgresql_where=text("tracking_id IS NOT NULL"),
+        ),
+        # 支払/請求の期間判定・L2ログ突合の対象判定は COALESCE(completed_at, created_at) で
+        # 絞り込むため、同じ式のインデックスにする（completed_at 単独のインデックスは使われない）
+        Index(
+            "ix_transactions_effective_completed_at",
+            text("COALESCE(completed_at, created_at)"),
+        ),
     )
 
     # Relationships
@@ -726,6 +764,23 @@ class Transaction(Base):
         "PaymentServiceUserRegistration",
         back_populates="transactions"
     )
+
+    @classmethod
+    def effective_completed_at(cls):
+        """期間判定用のデータ交換完了日時（completed_at 未設定の既存行は created_at）"""
+        return func.coalesce(cls.completed_at, cls.created_at)
+
+    @classmethod
+    def l2_succeeded(cls):
+        """L2 ログ突合で成功が確認できた取引（statusCode が 2xx）
+
+        CronJob（cronjob/src/check_l2log.py の L2_SUCCESS_SQL）と同じ判定にすること。
+        """
+        return cls.l2_http_status.op("~")(r"^2[0-9]{2}$")
+
+    @property
+    def completed_at_or_created_at(self):
+        return self.completed_at or self.created_at
 
     def __repr__(self):
         return (

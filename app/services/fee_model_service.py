@@ -11,6 +11,8 @@ from uuid import UUID
 from sqlalchemy.orm import Session
 
 from app.core.custom_exceptions import (
+    BusinessRuleViolationError,
+    IntegrityError,
     RecordNotFoundError,
     OptimisticLockError,
     ResourceConflictError,
@@ -28,6 +30,7 @@ from app.repositories.payment_repository import (
     FeeModelHistoryRepository,
     PaymentServiceRepository,
 )
+from app.utils.money import validate_amount_range
 
 logger = get_logger(__name__)
 
@@ -196,6 +199,20 @@ class FeeModelService:
 
         )
 
+    def get_fee_model(self, fee_model_id: UUID) -> FeeModelResponse:
+        """利用料モデルを1件取得"""
+        logger.debug("Getting fee model", fee_model_id=str(fee_model_id))
+
+        fee_model = self.fee_model_repo.get_by_id_or_raise(fee_model_id)
+
+        logger.info(
+            "Fee model retrieved successfully",
+            fee_model_id=str(fee_model_id),
+            version=fee_model.version
+        )
+
+        return FeeModelResponse.model_validate(fee_model)
+
     def update_fee_model(
         self,
         fee_model_id: UUID,
@@ -249,11 +266,15 @@ class FeeModelService:
                     )
 
             # 更新前の状態を履歴に保存
-            self.history_repo.create_snapshot(
-                fee_model=fee_model,
-                change_type="update",
-                change_reason="Pre-update snapshot"
-            )
+            try:
+                self.history_repo.create_snapshot(
+                    fee_model=fee_model,
+                    change_type="update",
+                    change_reason="Pre-update snapshot"
+                )
+            except IntegrityError:
+                # 読込後に別のリクエストがモデルを削除した（履歴の外部キー違反）
+                raise RecordNotFoundError(entity="Fee model", identifier=fee_model_id)
 
             # フィールドを更新
             updated_fields = []
@@ -285,9 +306,29 @@ class FeeModelService:
                 fee_model.is_active = request.is_active
                 updated_fields.append("is_active")
 
-            # バージョンをインクリメント
-            fee_model.version += 1
+            # 部分更新後の有効期間を検証する（DB の CHECK 制約違反で 500 にしない）
+            if fee_model.valid_to is not None and fee_model.valid_to <= fee_model.valid_from:
+                raise BusinessRuleViolationError(
+                    message="valid_to must be after valid_from",
+                    rule="valid_period"
+                )
 
+            # 金額に関わる項目を変更する場合、部分更新後の値で税込金額が DB カラム上限を
+            # 超えないことを検証する（price だけ・tax_rate だけの更新では schema 側で検証できないため）。
+            # 金額に触れない更新（無効化など）は、旧仕様で登録された範囲外の行でも受け付ける。
+            if {"price", "tax_rate", "tax_classification"} & set(updated_fields):
+                try:
+                    validate_amount_range(
+                        fee_model.price, fee_model.tax_rate, fee_model.tax_classification
+                    )
+                except ValueError as e:
+                    raise BusinessRuleViolationError(
+                        message=str(e),
+                        rule="amount_range"
+                    )
+
+            # バージョンは UPDATE 時に +1 される（WHERE version = <読込時の値> で更新）。
+            # 同時更新で読込時の version と一致しない場合は OptimisticLockError となる。
             fee_model = self.fee_model_repo.update(fee_model)
             self.db.commit()
 
@@ -302,7 +343,7 @@ class FeeModelService:
 
             return FeeModelResponse.model_validate(fee_model)
 
-        except (RecordNotFoundError, OptimisticLockError, ResourceConflictError) as e:
+        except (RecordNotFoundError, OptimisticLockError, ResourceConflictError, BusinessRuleViolationError) as e:
             self.db.rollback()
             execution_time = time.time() - start_time
             logger.error(
@@ -336,6 +377,14 @@ class FeeModelService:
         try:
             fee_model = self.fee_model_repo.get_by_id_or_raise(fee_model_id)
 
+            # 取引が価格スナップショット（履歴）を参照しているモデルは削除しない
+            # （履歴が削除されると取引の金額の根拠が失われる。詳細設計 2.2 の RESTRICT）
+            if self.history_repo.is_referenced_by_transactions(fee_model_id):
+                raise ResourceConflictError(
+                    message="Fee model is referenced by transactions and cannot be deleted",
+                    resource=f"fee_model_id={fee_model_id}"
+                )
+
             # 削除前の状態を履歴に保存
             self.history_repo.create_snapshot(
                 fee_model=fee_model,
@@ -343,7 +392,14 @@ class FeeModelService:
                 change_reason="Deleted"
             )
 
-            self.fee_model_repo.delete(fee_model)
+            try:
+                self.fee_model_repo.delete(fee_model)
+            except IntegrityError:
+                # 確認後に取引が追加された（DB の ON DELETE RESTRICT で拒否された）
+                raise ResourceConflictError(
+                    message="Fee model is referenced by transactions and cannot be deleted",
+                    resource=f"fee_model_id={fee_model_id}"
+                )
             self.db.commit()
 
             logger.info(
@@ -351,10 +407,10 @@ class FeeModelService:
                 fee_model_id=str(fee_model_id)
             )
 
-        except RecordNotFoundError as e:
+        except (RecordNotFoundError, OptimisticLockError, ResourceConflictError) as e:
             self.db.rollback()
             logger.error(
-                "Fee model deletion failed - not found",
+                "Fee model deletion failed",
                 fee_model_id=str(fee_model_id),
                 error_message=str(e)
             )

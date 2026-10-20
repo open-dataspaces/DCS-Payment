@@ -1,5 +1,3 @@
-from uuid import uuid4
-
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
@@ -11,6 +9,7 @@ from app.core.custom_exceptions import (
     ResourceConflictError,
     BusinessRuleViolationError,
     DatabaseError,
+    LockTimeoutError,
 )
 from app.core.logging import get_logger, set_request_id
 from app.core.security import (
@@ -61,7 +60,7 @@ router = APIRouter()
         status.HTTP_500_INTERNAL_SERVER_ERROR: {"description": "サーバエラー", "model": ErrorResponse},
     }
 )
-async def check_transaction_eligibility(
+def check_transaction_eligibility(
     request: TransactionEligibilityRequest,
     headers: dict = Depends(verify_request_headers),
     credential: dict = Depends(verify_access_token),
@@ -70,7 +69,7 @@ async def check_transaction_eligibility(
 ) -> TransactionEligibilityResponse:
     """取引可否を確認"""
     # リクエストIDを設定
-    tracking_id = headers.get('x-trackingId') or str(uuid4())
+    tracking_id = headers["x_tracking_id"]
     set_request_id(tracking_id)
 
     logger.info(
@@ -88,7 +87,7 @@ async def check_transaction_eligibility(
     service = TransactionService(db)
     try:
         # 与信確認を含む取引可否確認を実行
-        result = await service.check_transaction_eligibility(
+        result = service.check_transaction_eligibility(
             request,
             tracking_id=tracking_id,
         )
@@ -109,6 +108,26 @@ async def check_transaction_eligibility(
         )
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(e)
+        )
+    except (ResourceConflictError, DuplicateRecordError) as e:
+        logger.warning(
+            "Request failed - resource conflict",
+            error=str(e),
+            status_code=409
+        )
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=str(e)
+        )
+    except BusinessRuleViolationError as e:
+        logger.warning(
+            "Request failed - business rule violation",
+            error=str(e),
+            status_code=400
+        )
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(e)
         )
     except DatabaseError as e:
@@ -135,7 +154,7 @@ async def check_transaction_eligibility(
             detail="unexpected error"
         )
     finally:
-        await service.close()
+        service.close()
 
 
 @router.post(
@@ -151,21 +170,18 @@ async def check_transaction_eligibility(
         status.HTTP_404_NOT_FOUND: {"description": "データなし", "model": ErrorResponse},
         status.HTTP_409_CONFLICT: {"description": "リソース競合エラー", "model": ErrorResponse},
         status.HTTP_500_INTERNAL_SERVER_ERROR: {"description": "サーバエラー", "model": ErrorResponse},
+        status.HTTP_503_SERVICE_UNAVAILABLE: {"description": "他のリクエストが同じ取引を処理中（時間をおいて再送）", "model": ErrorResponse},
     }
 )
-async def register_data_exchange_status(
+def register_data_exchange_status(
     request: DataExchangeRequest,
     headers: dict = Depends(verify_request_headers),
     credential: dict = Depends(verify_access_token),
     _: None = Depends(require_permission("data-exchange:post")),
     db: Session = Depends(get_db),
 ) -> DataExchangeStatusResponse:
-    """データ交換状態を登録
-
-    トランザクション作成後、外部決済サービスが取引登録をサポートしている場合は
-    取引登録APIを呼び出す。
-    """
-    request_id = headers.get('x-trackingId') or str(uuid4())
+    """データ交換状態を登録"""
+    request_id = headers["x_tracking_id"]
     set_request_id(request_id)
 
     logger.info(
@@ -198,9 +214,8 @@ async def register_data_exchange_status(
 
     service = TransactionService(db)
     try:
-        result = await service.register_data_exchange(
+        result = service.register_data_exchange(
             request,
-            tracking_id_header=request_id,
             operator_id=operator_id,
         )
 
@@ -257,17 +272,17 @@ async def register_data_exchange_status(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(e)
         )
-    except PaymentClientError as e:
-        logger.error(
-            "Request failed - external payment service error",
+    except LockTimeoutError as e:
+        logger.warning(
+            "Request failed - transaction is being processed by another request",
             tracking_id=request.tracking_id,
             error=str(e),
-            status_code=502,
-            exc_info=True
+            status_code=503
         )
         raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail="External payment service error"
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(e),
+            headers={"Retry-After": str(settings.DB_LOCK_TIMEOUT)},
         )
     except DatabaseError as e:
         logger.error(
@@ -295,7 +310,7 @@ async def register_data_exchange_status(
             detail="unexpected error"
         )
     finally:
-        await service.close()
+        service.close()
 
 
 @router.put(
@@ -311,9 +326,10 @@ async def register_data_exchange_status(
         status.HTTP_404_NOT_FOUND: {"description": "データなし", "model": ErrorResponse},
         status.HTTP_409_CONFLICT: {"description": "リソース競合エラー", "model": ErrorResponse},
         status.HTTP_500_INTERNAL_SERVER_ERROR: {"description": "サーバエラー", "model": ErrorResponse},
+        status.HTTP_503_SERVICE_UNAVAILABLE: {"description": "他のリクエストが同じ取引を処理中（時間をおいて再送）", "model": ErrorResponse},
     }
 )
-async def update_data_exchange_status(
+def update_data_exchange_status(
     request: DataExchangeStatusRequest,
     headers: dict = Depends(verify_request_headers),
     credential: dict = Depends(verify_access_token),
@@ -321,7 +337,7 @@ async def update_data_exchange_status(
     db: Session = Depends(get_db),
 ) -> DataExchangeStatusResponse:
     """データ交換状態を更新"""
-    request_id = headers.get('x-trackingId') or str(uuid4())
+    request_id = headers["x_tracking_id"]
     set_request_id(request_id)
 
     # 登録者IDを取得
@@ -382,6 +398,18 @@ async def update_data_exchange_status(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(e)
         )
+    except LockTimeoutError as e:
+        logger.warning(
+            "Request failed - transaction is being processed by another request",
+            tracking_id=request.tracking_id,
+            error=str(e),
+            status_code=503
+        )
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(e),
+            headers={"Retry-After": str(settings.DB_LOCK_TIMEOUT)},
+        )
     except DatabaseError as e:
         logger.error(
             "Request failed - database error",
@@ -408,7 +436,7 @@ async def update_data_exchange_status(
             detail="unexpected error"
         )
     finally:
-        await service.close()
+        service.close()
 
 
 # --------------------------------------------------------------------
@@ -429,7 +457,7 @@ async def update_data_exchange_status(
         status.HTTP_500_INTERNAL_SERVER_ERROR: {"description": "サーバエラー", "model": ErrorResponse},
     }
 )
-async def check_transaction_eligibility_non_fee_model(
+def check_transaction_eligibility_non_fee_model(
     request: TransactionEligibilityNonFeeModelRequest,
     headers: dict = Depends(verify_request_headers),
     credential: dict = Depends(verify_access_token),
@@ -437,7 +465,7 @@ async def check_transaction_eligibility_non_fee_model(
     db: Session = Depends(get_db),
 ) -> TransactionEligibilityNonFeeModelResponse:
     """取引可否を確認（利用料モデル無し）"""
-    tracking_id = headers.get('x-trackingId') or str(uuid4())
+    tracking_id = headers["x_tracking_id"]
     set_request_id(tracking_id)
 
     logger.info(
@@ -456,7 +484,7 @@ async def check_transaction_eligibility_non_fee_model(
     service = TransactionService(db)
     try:
         # 与信確認を含む取引可否確認を実行（利用料モデル無し）
-        result = await service.check_transaction_eligibility_non_fee_model(
+        result = service.check_transaction_eligibility_non_fee_model(
             request,
             tracking_id=tracking_id,
         )
@@ -477,6 +505,26 @@ async def check_transaction_eligibility_non_fee_model(
         )
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(e)
+        )
+    except (ResourceConflictError, DuplicateRecordError) as e:
+        logger.warning(
+            "Request failed - resource conflict",
+            error=str(e),
+            status_code=409
+        )
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=str(e)
+        )
+    except BusinessRuleViolationError as e:
+        logger.warning(
+            "Request failed - business rule violation",
+            error=str(e),
+            status_code=400
+        )
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(e)
         )
     except DatabaseError as e:
@@ -504,7 +552,7 @@ async def check_transaction_eligibility_non_fee_model(
         )
     finally:
         # PaymentClientのリソースをクリーンアップ
-        await service.close()
+        service.close()
 
 
 @router.post(
@@ -520,9 +568,11 @@ async def check_transaction_eligibility_non_fee_model(
         status.HTTP_404_NOT_FOUND: {"model": ErrorResponse, "description": "データなし"},
         status.HTTP_409_CONFLICT: {"model": ErrorResponse, "description": "リソース競合エラー"},
         status.HTTP_500_INTERNAL_SERVER_ERROR: {"model": ErrorResponse, "description": "サーバエラー"},
+        status.HTTP_503_SERVICE_UNAVAILABLE: {"description": "他のリクエストが同じ取引を処理中（時間をおいて再送）", "model": ErrorResponse},
+        status.HTTP_502_BAD_GATEWAY: {"description": "外部決済サービスエラー", "model": ErrorResponse},
     }
 )
-async def confirm_data_exchange(
+def confirm_data_exchange(
     request: DataExchangeNonFeeModelRequest,
     headers: dict = Depends(verify_request_headers),
     credential: dict = Depends(verify_access_token),
@@ -534,7 +584,7 @@ async def confirm_data_exchange(
     利用料モデルを使用せず、リクエストで直接指定された金額で
     トランザクションを作成し、外部決済サービスに取引登録を実行する。
     """
-    request_id = headers.get('x-trackingId') or str(uuid4())
+    request_id = headers["x_tracking_id"]
     set_request_id(request_id)
 
     logger.info(
@@ -553,7 +603,7 @@ async def confirm_data_exchange(
     service = TransactionService(db)
     try:
         # 取引登録を含むデータ交換取引金額確定を実行
-        result = await service.confirm_data_exchange_non_fee_model(
+        result = service.confirm_data_exchange_non_fee_model(
             request,
             tracking_id_header=request_id,
         )
@@ -566,6 +616,36 @@ async def confirm_data_exchange(
 
         return result
 
+    except RecordNotFoundError as e:
+        logger.warning(
+            "Request failed - resource not found",
+            error=str(e),
+            status_code=404
+        )
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(e)
+        )
+    except (ResourceConflictError, DuplicateRecordError) as e:
+        logger.warning(
+            "Request failed - resource conflict",
+            error=str(e),
+            status_code=409
+        )
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=str(e)
+        )
+    except BusinessRuleViolationError as e:
+        logger.warning(
+            "Request failed - business rule violation",
+            error=str(e),
+            status_code=400
+        )
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e)
+        )
     except PaymentClientError as e:
         logger.error(
             "Request failed - external payment service error",
@@ -576,6 +656,18 @@ async def confirm_data_exchange(
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail="External payment service error"
+        )
+    except LockTimeoutError as e:
+        logger.warning(
+            "Request failed - transaction is being processed by another request",
+            tracking_id=request.tracking_id or request_id,
+            error=str(e),
+            status_code=503
+        )
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(e),
+            headers={"Retry-After": str(settings.DB_LOCK_TIMEOUT)},
         )
     except DatabaseError as e:
         logger.error(
@@ -602,7 +694,7 @@ async def confirm_data_exchange(
         )
     finally:
         # PaymentClientのリソースをクリーンアップ
-        await service.close()
+        service.close()
 
 
 # --------------------------------------------------------------------
@@ -621,7 +713,7 @@ async def confirm_data_exchange(
         status.HTTP_500_INTERNAL_SERVER_ERROR: {"description": "サーバエラー", "model": ErrorResponse},
     }
 )
-async def get_consumer_transactions(
+def get_consumer_transactions(
     request: ConsumerTransactionRequest,
     headers: dict = Depends(verify_request_headers),
     credential: dict = Depends(verify_access_token),
@@ -629,7 +721,7 @@ async def get_consumer_transactions(
     db: Session = Depends(get_db),
 ) -> ConsumerTransactionListResponse:
     """利用者トランザクションを取得"""
-    request_id = headers.get('x-trackingId') or str(uuid4())
+    request_id = headers["x_tracking_id"]
     set_request_id(request_id)
 
     # アクセストークン内のoperator_idをprovider_idとして使用

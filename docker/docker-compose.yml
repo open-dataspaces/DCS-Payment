@@ -33,8 +33,8 @@ services:
       # セキュリティ設定（開発用 - 本番では使用しないこと）
       # ===========================================
       SECRET_KEY: ${SECRET_KEY:-dev-only-secret-key-change-in-production}
-      # CORS: 開発環境のみ * を許可、本番では具体的なオリジンを指定
-      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000}
+      # CORS で許可するオリジン（カンマ区切り）。本番では具体的なオリジンを指定する
+      ALLOWED_HOSTS: ${ALLOWED_HOSTS:-http://localhost:3000}
 
       # ===========================================
       # API Keys（開発用 - 環境変数で上書き可能）
@@ -56,12 +56,10 @@ services:
       L3_CLIENT_SECRET: ${L3_CLIENT_SECRET:-dev-client-secret}
 
       # ===========================================
-      # 認可サービス設定
+      # 認可サービス設定（L3 の認可判定APIを経由。L3_BASE_URL / L3_API_KEY を使用）
       # ===========================================
       AUTHZ_ENABLED: "false"
-      AUTHZ_BASE_URL: ${AUTHZ_BASE_URL:-http://openfga:8080}
-      AUTHZ_OPENFGA_STORE_ID: ${AUTHZ_OPENFGA_STORE_ID:-01KEVMH7G43TPP1BSMPWAFC405}
-      AUTHZ_OPENFGA_MODEL_ID: ${AUTHZ_OPENFGA_MODEL_ID:-01KEVMH7GK0BZCHAAEPZR0WDTM}
+      AUTHZ_STORE_ID: ${AUTHZ_STORE_ID:-01KEVMH7G43TPP1BSMPWAFC405}
 
       # ===========================================
       # 外部決済サービス設定
@@ -91,7 +89,10 @@ services:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
       DB_CONNECT_TIMEOUT: ${DB_CONNECT_TIMEOUT:-10}
+      DB_POOL_SIZE: ${DB_POOL_SIZE:-5}
+      DB_MAX_OVERFLOW: ${DB_MAX_OVERFLOW:-10}
       DB_POOL_TIMEOUT: ${DB_POOL_TIMEOUT:-10}
+      DB_LOCK_TIMEOUT: ${DB_LOCK_TIMEOUT:-3}
 
       # ===========================================
       # ログ設定（開発環境）

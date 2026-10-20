@@ -1,6 +1,9 @@
 """Application Configuration"""
-from typing import List, Literal
-from pydantic_settings import BaseSettings, SettingsConfigDict
+import json
+from typing import Annotated, List, Literal
+from urllib.parse import quote
+
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 from pydantic import computed_field, field_validator
 
 
@@ -15,6 +18,7 @@ class Settings(BaseSettings):
     # L3 ACCESS (環境変数から取得 - デフォルト値なし)
     L3_BASE_URL: str = ""
     L3_INTROSPECT_ENDPOINT: str = "/auth/token/introspect"
+    L3_AUTHZ_EVALUATION_ENDPOINT: str = "/authz/stores/{store_id}/access/v1/evaluation"
     L3_API_KEY: str = ""
     L3_CLIENT_ID: str = ""
     L3_CLIENT_SECRET: str = ""
@@ -32,7 +36,10 @@ class Settings(BaseSettings):
     # Database Connection Pool Settings
     # ===========================================
     DB_CONNECT_TIMEOUT: int = 10  # DB接続確立のタイムアウト（秒）
+    DB_POOL_SIZE: int = 5         # 接続プールに保持する接続数
+    DB_MAX_OVERFLOW: int = 10     # DB_POOL_SIZE を超えて一時的に作る接続数（同時処理数の上限は合計）
     DB_POOL_TIMEOUT: int = 10     # プールから接続取得のタイムアウト（秒）
+    DB_LOCK_TIMEOUT: int = 3      # 取引の行ロック待ちのタイムアウト（秒）。超過時は 503（Retry-After 付き）
 
     # ===========================================
     # Database ACCESS (Develop) - ローカルDocker用
@@ -55,17 +62,18 @@ class Settings(BaseSettings):
     OPERATOR_ID_VERIFICATION_ENABLED: bool = True
 
     # ===========================================
-    # 認可サービス設定
+    # 認可サービス設定（L3 の認可判定API（AuthZEN）を経由して認可確認する）
     # ===========================================
     AUTHZ_ENABLED: bool = False
-    AUTHZ_BASE_URL: str = ""
-    AUTHZ_OPENFGA_STORE_ID: str = ""
-    AUTHZ_OPENFGA_MODEL_ID: str = ""
+    AUTHZ_STORE_ID: str = ""  # 精算決済のAPI実行権限を登録した L3 の認可ストアID
 
     # ===========================================
     # L2 HTTPステータスフィルタ設定
+    # True: 支払/請求予定額に l2_http_status が 2xx（L2ログ突合で成功確認済み）の取引のみ含める
+    # False: L2ログ突合 CronJob を運用しない環境向け（L2 未確定の取引も含める）
+    # いずれの場合も settlement_status='cancelled' の取引は含めない
     # ===========================================
-    L2_HTTP_STATUS_FILTER_ENABLED: bool = False
+    L2_HTTP_STATUS_FILTER_ENABLED: bool = True
 
     # ===========================================
     # 外部決済サービス設定
@@ -100,7 +108,17 @@ class Settings(BaseSettings):
     # ===========================================
     # CORS (本番環境では具体的なオリジンを指定すること)
     # ===========================================
-    ALLOWED_HOSTS: List[str] = []
+    # 環境変数ではカンマ区切り（a,b）または JSON 配列（["a","b"]）で指定する
+    # （NoDecode: pydantic-settings に JSON として解釈させず、parse_allowed_hosts で解釈する）
+    ALLOWED_HOSTS: Annotated[List[str], NoDecode] = []
+
+    @field_validator('DB_LOCK_TIMEOUT')
+    @classmethod
+    def validate_db_lock_timeout(cls, v: int) -> int:
+        """PostgreSQL の lock_timeout は 0 で無制限になるため、1 秒以上に限る"""
+        if v < 1:
+            raise ValueError('DB_LOCK_TIMEOUT must be 1 or greater')
+        return v
 
     @field_validator('SECRET_KEY')
     @classmethod
@@ -112,11 +130,14 @@ class Settings(BaseSettings):
     @field_validator('ALLOWED_HOSTS', mode='before')
     @classmethod
     def parse_allowed_hosts(cls, v):
-        """CORS_ORIGINSをパース（カンマ区切り文字列またはリスト）"""
+        """ALLOWED_HOSTS（CORS の許可オリジン）をパース（カンマ区切り文字列・JSON 配列・リスト）"""
         if isinstance(v, str):
+            v = v.strip()
             if not v:
                 return []
-            return [host.strip() for host in v.split(',')]
+            if v.startswith('['):
+                return json.loads(v)
+            return [host.strip() for host in v.split(',') if host.strip()]
         return v
     
     # ===========================================
@@ -140,14 +161,15 @@ class Settings(BaseSettings):
     def DATABASE_URL(self) -> str:
         """環境に応じたデータベースURLを返す"""
         if self.ENVIRONMENT == "DEVELOP":
+            # ユーザー名・パスワードは URL エンコードする（'@' や '%' を含む場合に URL が壊れないように）
             return (
-                f"postgresql://{self.DEV_POSTGRES_USER}:{self.DEV_POSTGRES_PASSWORD}"
+                f"postgresql://{quote(self.DEV_POSTGRES_USER, safe='')}:{quote(self.DEV_POSTGRES_PASSWORD, safe='')}"
                 f"@{self.DEV_POSTGRES_HOST}:{self.DEV_POSTGRES_PORT}/{self.DEV_POSTGRES_DB}"
             )
         else:
             # 本番環境ではSSL接続を推奨
             return (
-                f"postgresql://{self.POSTGRES_USER}:{self.POSTGRES_PASSWORD}"
+                f"postgresql://{quote(self.POSTGRES_USER, safe='')}:{quote(self.POSTGRES_PASSWORD, safe='')}"
                 f"@{self.POSTGRES_HOST}:{self.POSTGRES_PORT}/{self.POSTGRES_DB}"
             )
 

@@ -17,6 +17,7 @@ from app.middleware import (
     TrackingMiddleware,
     ContentTypeMiddleware,
     CommonSecurityHeadersMiddleware,
+    UnhandledExceptionMiddleware,
     add_exception_handlers,
 )
 
@@ -48,6 +49,8 @@ cors_origins = settings.ALLOWED_HOSTS if settings.ALLOWED_HOSTS else []
 if "*" in cors_origins and settings.IS_PRODUCTION:
     logger.warning("CORS: Wildcard origin '*' is not recommended in production")
 
+# 想定外の例外を最も内側で 500 応答に変換し、外側のミドルウェアでヘッダを付ける
+app.add_middleware(UnhandledExceptionMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=cors_origins,
@@ -56,8 +59,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 app.add_middleware(GZipMiddleware, minimum_size=1000)
-app.add_middleware(CommonSecurityHeadersMiddleware)
+# ContentTypeMiddleware の 400 応答にもセキュリティヘッダ・X-TrackingId が付くよう、
+# CommonSecurityHeadersMiddleware・TrackingMiddleware より内側に登録する
 app.add_middleware(ContentTypeMiddleware)
+app.add_middleware(CommonSecurityHeadersMiddleware)
 app.add_middleware(TrackingMiddleware)
 
 # ========================================

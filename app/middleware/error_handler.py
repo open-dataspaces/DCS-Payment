@@ -6,6 +6,7 @@ from fastapi import FastAPI, Request, status
 from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError, HTTPException
 from sqlalchemy.exc import SQLAlchemyError
+from starlette.middleware.base import BaseHTTPMiddleware
 
 from app.core.logging import get_logger
 from app.core.custom_exceptions import (
@@ -43,6 +44,46 @@ def _sanitize_errors(errors: list) -> list:
     return sanitized
 
 
+def unexpected_error_response(request: Request, exc: Exception) -> JSONResponse:
+    """想定外の例外を 500 応答（詳細は非公開）に変換し、ログに記録する"""
+    logger.error(
+        "Unexpected error",
+        extra={
+            "error": str(exc),
+            "error_type": type(exc).__name__,
+            "method": request.method,
+            "path": request.url.path,
+            "tracking_id": request.headers.get("X-TrackingId", ""),
+        },
+        exc_info=exc,
+    )
+    return JSONResponse(
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        content={
+            "type": "internal_error",
+            "title": "Internal Server Error",
+            "detail": "",  # セキュリティのため詳細は非公開
+            "status": 500,
+            "instance": request.url.path
+        }
+    )
+
+
+class UnhandledExceptionMiddleware(BaseHTTPMiddleware):
+    """想定外の例外をアプリ側のミドルウェアの内側で 500 応答に変換する
+
+    Exception 用の例外ハンドラは Starlette の ServerErrorMiddleware（最も外側）で実行されるため、
+    その応答には TrackingMiddleware・CommonSecurityHeadersMiddleware のヘッダ（X-TrackingId・
+    セキュリティヘッダ）が付かない。最も内側のミドルウェアとして登録し、ここで応答を作る。
+    """
+
+    async def dispatch(self, request: Request, call_next):
+        try:
+            return await call_next(request)
+        except Exception as exc:
+            return unexpected_error_response(request, exc)
+
+
 def add_exception_handlers(app: FastAPI):
     """Add exception handlers to FastAPI app"""
 
@@ -52,7 +93,8 @@ def add_exception_handlers(app: FastAPI):
         # エラーをJSON直列化可能な形式に変換
         errors = _sanitize_errors(exc.errors())
 
-        logger.error("Validation error", extra={"errors": errors})
+        # クライアントの入力誤りのため WARNING（詳細設計 3.6）
+        logger.warning("Validation error", extra={"errors": errors})
 
         return JSONResponse(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -74,7 +116,8 @@ def add_exception_handlers(app: FastAPI):
             "Application error",
             extra={
                 "error_code": error_code,
-                "message": message,
+                # "message" は LogRecord の予約属性のため別名にする（同名だと KeyError になる）
+                "error_message": message,
                 "exception_class": exc.__class__.__name__,
                 "status_code": status_code,
                 "path": request.url.path,
@@ -104,7 +147,8 @@ def add_exception_handlers(app: FastAPI):
             404: "not_found",
             409: "conflict",
             422: "unprocessable_entity",
-            500: "internal_server_error"
+            500: "internal_server_error",
+            503: "service_unavailable",
         }
         
         title_map = {
@@ -114,7 +158,8 @@ def add_exception_handlers(app: FastAPI):
             404: "Not Found",
             409: "Conflict",
             422: "Unprocessable Entity",
-            500: "Internal Server Error"
+            500: "Internal Server Error",
+            503: "Service Unavailable",
         }
         
         error_type = error_type_map.get(exc.status_code, "error")
@@ -133,7 +178,9 @@ def add_exception_handlers(app: FastAPI):
                 "detail": exc.detail,
                 "status": exc.status_code,
                 "instance": request.url.path
-            }
+            },
+            # 401 の WWW-Authenticate など、例外に指定された応答ヘッダを引き継ぐ
+            headers=getattr(exc, "headers", None),
         )
     
     @app.exception_handler(SQLAlchemyError)
@@ -163,26 +210,5 @@ def add_exception_handlers(app: FastAPI):
 
     @app.exception_handler(Exception)
     async def general_exception_handler(request: Request, exc: Exception):
-        """一般的なエラーのハンドリング"""
-        logger.error(
-            "Unexpected error",
-            extra={
-                "error": str(exc),
-                "error_type": type(exc).__name__,
-                "method": request.method,
-                "path": request.url.path,
-                "tracking_id": request.headers.get("X-TrackingId", ""),
-            },
-            exc_info=True,
-        )
-
-        return JSONResponse(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            content={
-                "type": "internal_error",
-                "title": "Internal Server Error",
-                "detail": "",  # セキュリティのため詳細は非公開
-                "status": 500,
-                "instance": request.url.path
-            }
-        )
+        """一般的なエラーのハンドリング（通常は UnhandledExceptionMiddleware で処理される）"""
+        return unexpected_error_response(request, exc)

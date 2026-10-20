@@ -19,8 +19,15 @@ class ContentTypeMiddleware(BaseHTTPMiddleware):
             # Content-Typeが存在し、かつapplication/jsonで始まらない場合のみエラー
             # charset指定（例: application/json; charset=utf-8）も許可
             if content_type and not content_type.startswith(self.ALLOWED_CONTENT_TYPES):
+                # エラー応答は RFC 9457 形式（基本設計 4.3）
                 return JSONResponse(
                     status_code=400,
-                    content={"detail": "Content-Type must be application/json"}
+                    content={
+                        "type": "bad_request",
+                        "title": "Bad Request",
+                        "detail": "Content-Type must be application/json",
+                        "status": 400,
+                        "instance": request.url.path,
+                    }
                 )
         return await call_next(request)

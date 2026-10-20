@@ -21,7 +21,7 @@
 * 認証機能は、アイデンティティレイヤ（L3）との連携を前提とするため、本システムの対象外
 * 通信は **TLS** 前提（外部のプロキシ／ロードバランサーで終端、API→DB間も TLS）。
 * TLS終端は、本ソフトウェアの外部で行うため対象外
-* 認可ポリシーは OpenFGAを使用し管理
+* 認可ポリシーは L3 Identity Componentの認可機能（OpenFGA）で管理し、認可判定は L3 の認可判定APIを経由して行う
 * 外部決済サービスとの連携は、検証のみとする。
 
 ---
@@ -380,6 +380,8 @@ end
 * **Base URL**: `/api/v1`
 * **バージョン管理**: URL版管理方式（/v1）
 * **認証**: `Authorization: Bearer <JWT>`
+* **APIキー**: `X-Payment-API-Key: <APIキー>`
+* **HTTPヘッダ名の表記**: 標準ヘッダは RFC の表記に従う（例: `Authorization`, `Content-Type`）。独自ヘッダは先頭を `X-` とし、ハイフン区切りの各単語の先頭のみ大文字、頭字語は全て大文字とする（例: `X-Payment-API-Key`）。ODP で定義されたヘッダは ODP の表記に従う（例: `X-TrackingId`）。なお、HTTP ヘッダ名は大文字小文字を区別しない（RFC 9110）。
 * **リクエスト形式**: 
   - Content-Type: `application/json`
   - 文字エンコーディング: UTF-8
@@ -393,6 +395,7 @@ end
 | メソッド   | パス                                 | 説明                      |
 | ------ | ---------------------------------- | ----------------------- |
 | GET    | `/api/v1/fee-model`             | 利用料モデル一覧取得 |
+| GET    | `/api/v1/fee-model/{fee_model_id}`             | 利用料モデル取得 |
 | POST    | `/api/v1/fee-model`             | 利用料モデル登録 |
 | PUT    | `/api/v1/fee-model/{fee_model_id}`             | 利用料モデル変更 |
 | DELETE | `/api/v1/fee-model/{fee_model_id}`             | 利用料モデル削除 |
@@ -443,7 +446,7 @@ end
 - L3 Identity Componentとの認証フローは、利用ユーザの場合は、認可コードフローにより認証を行い取得したアクセストークンを利用する。
 - L3 Identity Componentとの認証フローは、ユーザシステムの場合(人を介在しない場合)は、クレデンシャルフローにより認証を行い取得したアクセストークンを利用する。
 - 各APIのAuthorizationヘッダに付与されたアクセストークンを元に、利用ユーザまたは、ユーザシステムを特定し、認可情報をチェック後、該当するAPI処理を実行し、処理結果を返却する。
-- 認可機能は、精算決済機能とは別にOpenFGAを構築し、認可登録、認可チェックを行うことを前提とする。
+- 認可機能は、L3 Identity Componentの認可機能を使用する。認可登録、認可チェックは L3 の認可APIを経由して行う。
 
 ### 5.2 認可機能
 
@@ -452,11 +455,13 @@ end
 
 - 認可登録
   - 事前にユーザ(operator_id)単位で、精算決済のどのAPIに対してアクセス可能とするかを登録する。
-  - 認可登録は、認可機能(OpenFGA)のAPIを実行して登録する。
+  - 認可登録は、L3 の認可タプル登録API（`POST /authz/stores/{store_id}/write`）を実行して登録する。
 
 - 認可確認
   - 精算決済の各API内で、アクセストークンを確認し、operator_idを取得
-  - 精算決済の各APIから認可機能に該当operator_idが対象の精算決済APIに対して認可登録がされているかを問い合わせる。
+  - 精算決済の各APIから L3 の認可判定API（AuthZEN: `POST /authz/stores/{store_id}/access/v1/evaluation`）に、該当operator_idが対象の精算決済APIに対して認可登録がされているかを問い合わせる。
+    - L3 へは、本ソフトウェアのAPIキー（`API-Key` ヘッダ）と、APIの呼び出し元のアクセストークン（`Authorization` ヘッダ）で認証する。
+    - 判定内容は「`user:{operator_id}` が `api_endpoint:{対象API}` に対して `can_access` の関係を持つか」とし、L3 が認可ストア（OpenFGA）に判定を転送する。認可ストアの最新の認可モデルで判定される。
   - 認可されている場合は、APIを実行。
   - 認可されていない場合は、403エラーを返す。
 
@@ -525,10 +530,11 @@ end
 * 計算済金額(税込) `calculated_amount`（必須・DECIMAL）
 * 消費者データ交換ステータス `consumer_exchange_status`（必須・VARCHAR・pending/completed/failed・DEFAULT 'pending'）
 * 提供者データ交換ステータス `provider_exchange_status`（必須・VARCHAR・pending/completed/failed・DEFAULT 'pending'）
-* L2ログHTTPステータス `l2_http_status`（必須・VARCHAR・pending/HTTPステータスコード・DEFAULT 'pending'）
+* L2ログHTTPステータス `l2_http_status`（必須・VARCHAR・pending/HTTPステータスコード/timeout・DEFAULT 'pending'。2xx を成功とする。timeout は、遡及期間を過ぎても L2 ログで見つからなかったことを示す）
 * 精算決済状態 `settlement_status`（必須・VARCHAR・settled/unsettled/cancelled・DEFAULT 'unsettled'）
 * 注文内容 `order_details`（任意・TEXT）
 * 請求日 `request_date`（任意・TIMESTAMP）
+* データ交換完了日時 `completed_at`（任意・TIMESTAMP・INDEX・支払/請求の期間判定と NP 請求書発行基準日に使用。未設定時は `created_at` で代替）
 * 支払期限 `payment_deadline`（任意・TIMESTAMP）
 * 支払完了日時 `paid_at`（任意・TIMESTAMP）
 * 外部決済サービス固有データ `external_data`（任意・JSONB）
@@ -618,10 +624,11 @@ erDiagram
     DECIMAL calculated_amount "計算済金額(税込)"
     VARCHAR consumer_exchange_status "消費者データ交換ステータス(pending/completed/failed)"
     VARCHAR provider_exchange_status "提供者データ交換ステータス(pending/completed/failed)"
-    VARCHAR l2_http_status "L2ログHTTPステータス(pending/HTTPステータスコード)"
+    VARCHAR l2_http_status "L2ログHTTPステータス(pending/HTTPステータスコード/timeout)"
     VARCHAR settlement_status "精算決済状態(settled/unsettled/cancelled)"
     TEXT order_details "注文内容"
     TIMESTAMP request_date "請求日"
+    TIMESTAMP completed_at "データ交換完了日時"
     TIMESTAMP payment_deadline "支払期限"
     TIMESTAMP paid_at "支払完了日時"
     JSONB external_data "外部決済サービス固有データ"
@@ -667,6 +674,7 @@ erDiagram
 | --- | ---------- | --------------------------------------------------------------------------------------------------------- |
 | 1.0 | 2026-02-28 | 第1.0版 |
 | 1.1 | 2026-08-31 | 第1.1版 |
+| 1.2 | 2026-09-30 | 第1.2版 |
 
 ---
 

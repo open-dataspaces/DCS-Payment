@@ -1,13 +1,45 @@
-from pydantic import BaseModel, Field, ConfigDict, field_validator, model_validator
+from pydantic import AfterValidator, BaseModel, Field, ConfigDict, field_validator, model_validator
 from enum import Enum
-from typing import List, Optional, Any, Dict
-from datetime import datetime, date
-from decimal import Decimal
+from typing import Annotated, List, Optional, Any, Dict
+from datetime import datetime, date, timezone
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from uuid import UUID
+
+from app.utils.money import MAX_AMOUNT, to_decimal, validate_amount_range
 
 # ========================================
 # 定義
 # ========================================
+
+def _assume_utc_if_naive(v: datetime) -> datetime:
+    """タイムゾーンなしの日時は UTC とみなす
+
+    DB（timestamptz）や既存データとの比較で aware / naive が混在すると TypeError になるため、
+    リクエストの日時は必ず aware にそろえる。従来も naive の値は DB セッションの
+    タイムゾーン（UTC）として保存されていたため、それに合わせる。
+    """
+    return v.replace(tzinfo=timezone.utc) if v.tzinfo is None else v
+
+
+# リクエストで受け取る日時（タイムゾーン省略時は UTC）
+RequestDateTime = Annotated[datetime, AfterValidator(_assume_utc_if_naive)]
+
+
+def _amount_to_decimal(v: float) -> Decimal:
+    """リクエストの金額（float）を Decimal にし、小数 2 桁に四捨五入する
+
+    前回リリースと同じく数値をそのまま受け付け（小数 3 桁以上も可）、DB カラム（Numeric(15,2)）と
+    同じ桁・同じ丸め（四捨五入）にそろえる。丸めた値を DB 保存・NP 送信の両方に使うため値が一致する。
+    """
+    d = to_decimal(v)
+    if not d.is_finite():
+        raise ValueError("amount must be a finite number")
+    return d.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+
+# 利用料モデルなしの金額。OpenAPI 上は前回リリースと同じ number のまま、受け取った値は Decimal にする
+# （0・負の値も可。範囲 ±MAX_AMOUNT・税込金額の範囲は validate_amount_range で検証する）
+RequestAmount = Annotated[float, AfterValidator(_amount_to_decimal)]
 
 class TaxClassification(str, Enum):
     """税区分
@@ -88,8 +120,10 @@ def round_decimal(value: Decimal, decimal_places: int) -> Decimal:
 class FeeModelCoreFields(BaseModel):
     """利用料モデルのコアフィールド（更新可能）"""
 
+    # 金額の範囲（±MAX_AMOUNT 以内・税込で DB カラム上限以内）は入力時のみ検証する（FeeModelCreateRequest）。
+    # レスポンスでも検証すると、旧仕様で登録された範囲外の行が1件あるだけで一覧取得が 500 になるため。
     fee_model_name: str = Field(..., description="利用料モデル名", min_length=1, max_length=255)
-    price: Decimal = Field(..., description="金額", ge=Decimal("-9999999999999.99"), le=Decimal("9999999999999.99"))
+    price: Decimal = Field(..., description="金額")
     tax_classification: TaxClassification = Field(
         ...,
         description="税区分 (taxable: 課税, non_taxable: 非課税)"
@@ -145,13 +179,13 @@ class FeeModelOptionalFields(BaseModel):
         description="保管先識別子(将来拡張用)", 
         max_length=255
     )
-    valid_to: Optional[datetime] = Field(None, description="有効終了日時(NULL=現在有効)")
+    valid_to: Optional[RequestDateTime] = Field(None, description="有効終了日時(NULL=現在有効)")
 
 
 class FeeModelClientManagedFields(BaseModel):
     """クライアントが管理可能なフィールド"""
 
-    valid_from: datetime = Field(..., description="有効開始日時")
+    valid_from: RequestDateTime = Field(..., description="有効開始日時")
     is_active: bool = Field(True, description="現在有効フラグ", strict=True)
     version: int = Field(1, description="バージョン番号", ge=1)
 
@@ -185,9 +219,18 @@ class FeeModelCreateRequest(
     - created_at, updated_at（現在時刻）
     """
     
+    # 0・負の値（値引き等）も受け付ける。範囲は DB カラム（Numeric(15,2)）に収まること
+    price: Decimal = Field(..., description="金額", ge=-MAX_AMOUNT, le=MAX_AMOUNT)
+
     # デフォルト値を設定
     is_active: bool = Field(True, description="現在有効フラグ", strict=True)
     version: int = Field(1, description="バージョン番号", ge=1)
+
+    @model_validator(mode='after')
+    def validate_taxed_amount_range(self):
+        """税込金額が DB カラム上限（Numeric(15,2)）を超えないことを検証"""
+        validate_amount_range(self.price, self.tax_rate, self.tax_classification.value)
+        return self
     
     @field_validator('version')
     @classmethod
@@ -271,7 +314,7 @@ class FeeModelUpdateRequest(BaseModel):
         min_length=1,
         max_length=255
     )
-    price: Optional[Decimal] = Field(None, description="金額", ge=Decimal("-9999999999999.99"), le=Decimal("9999999999999.99"))
+    price: Optional[Decimal] = Field(None, description="金額", ge=-MAX_AMOUNT, le=MAX_AMOUNT)
     tax_classification: Optional[TaxClassification] = Field(
         None, 
         description="税区分 (taxable: 課税, non_taxable: 非課税)"
@@ -288,8 +331,8 @@ class FeeModelUpdateRequest(BaseModel):
         description="保管先識別子(将来拡張用)", 
         max_length=255
     )
-    valid_from: Optional[datetime] = Field(None, description="有効開始日時")
-    valid_to: Optional[datetime] = Field(None, description="有効終了日時(NULL=現在有効)")
+    valid_from: Optional[RequestDateTime] = Field(None, description="有効開始日時")
+    valid_to: Optional[RequestDateTime] = Field(None, description="有効終了日時(NULL=現在有効)")
     
     # クライアント管理フィールド（任意）
     is_active: Optional[bool] = Field(None, description="現在有効フラグ", strict=True)
@@ -379,8 +422,10 @@ class PaymentAmountItem(BaseModel):
     consumer_id: str = Field(..., description="データ利用者ID")
     data_id_list: List[str] = Field(..., description="データIDのリスト")
     completed_at: datetime = Field(..., description="データ交換処理完了日時")
+    # 金額は円単位（整数）に丸めた値のため float でも誤差は生じない（API契約維持のため float のまま）
     amount: float = Field(..., description="支払い予定額")
     tax_rate: float = Field(..., description="税率")
+    settlement_status: Optional[str] = Field(None, description="精算状態（settled: L2ログ突合済みで確定, unsettled: 未確定）")
 
 class PaymentAmountListResponse(BaseModel):
     payment_details: List[PaymentAmountItem] = Field(..., description="支払いリスト")
@@ -395,8 +440,10 @@ class BillingAmountItem(BaseModel):
     consumer_id: str = Field(..., description="データ利用者ID")
     data_id_list: List[str] = Field(..., description="データIDのリスト")
     completed_at: datetime = Field(..., description="データ交換処理完了日時")
+    # 金額は円単位（整数）に丸めた値のため float でも誤差は生じない（API契約維持のため float のまま）
     amount: float = Field(..., description="請求予定額")
     tax_rate: float = Field(..., description="税率")
+    settlement_status: Optional[str] = Field(None, description="精算状態（settled: L2ログ突合済みで確定, unsettled: 未確定）")
 
 class BillingAmountListResponse(BaseModel):
     billing_details: List[BillingAmountItem] = Field(..., description="請求リスト")
@@ -404,23 +451,48 @@ class BillingAmountListResponse(BaseModel):
 
 
 # データ交換処理状態登録
+def _validate_data_id_list(v: List[str]) -> List[str]:
+    """データIDリストの各要素が空文字でなく、重複しないことを検証
+
+    同じ data_id が重複すると、NP へ同じ取引を二重に与信依頼したり、
+    同一 tracking_id 配下の data_id の一意制約に違反したりするため受け付けない。
+    """
+    seen = set()
+    for i, item in enumerate(v):
+        if not item or not item.strip():
+            raise ValueError(f'data_id_list[{i}] must not be empty')
+        if item in seen:
+            raise ValueError(f'data_id_list[{i}] is duplicated: {item}')
+        seen.add(item)
+    return v
+
+
+def _validate_tracking_id(v: str) -> str:
+    """tracking_id は UUID 形式（小文字の正規形にそろえる）"""
+    try:
+        return str(UUID(v))
+    except ValueError:
+        raise ValueError('tracking_id must be a valid UUID')
+
+
 class DataExchangeRequest(BaseModel):
 
-    tracking_id: str = Field(..., description="トラッキングID", min_length=1)
+    tracking_id: str = Field(..., description="トラッキングID（UUID）", min_length=1)
     provider_id: str = Field(..., description="データ提供者ID", min_length=1, max_length=255)
     consumer_id: str = Field(..., description="データ利用者ID", min_length=1, max_length=255)
     data_id_list: List[str] = Field(..., description="データIDのリスト(外部システムにて発行)", min_length=1)
-    completed_at: datetime = Field(..., description="データ交換処理完了日時（ISO8601）")
+    completed_at: RequestDateTime = Field(..., description="データ交換処理完了日時（ISO8601。タイムゾーン省略時は UTC）")
     status: DataExchangeStatus = Field(..., description="データ交換ステータス (completed: 交換完了, failed: 交換失敗)")
+
+    @field_validator('tracking_id')
+    @classmethod
+    def validate_tracking_id_format(cls, v: str) -> str:
+        return _validate_tracking_id(v)
 
     @field_validator('data_id_list')
     @classmethod
     def validate_data_id_list_elements(cls, v: List[str]) -> List[str]:
-        """データIDリストの各要素が空文字でないことを検証"""
-        for i, item in enumerate(v):
-            if not item or not item.strip():
-                raise ValueError(f'data_id_list[{i}] must not be empty')
-        return v
+        return _validate_data_id_list(v)
 
     model_config = ConfigDict(
         extra="forbid",  # 未定義フィールドを即座に拒否
@@ -432,8 +504,13 @@ class DataExchangeStatusResponse(BaseModel):
 
 # データ交換処理状態更新
 class DataExchangeStatusRequest(BaseModel):
-    tracking_id: str = Field(..., description="トラッキングID", min_length=1)
+    tracking_id: str = Field(..., description="トラッキングID（UUID）", min_length=1)
     status: DataExchangeStatus = Field(..., description="データ交換ステータス (completed: 交換完了, failed: 交換失敗)")
+
+    @field_validator('tracking_id')
+    @classmethod
+    def validate_tracking_id_format(cls, v: str) -> str:
+        return _validate_tracking_id(v)
 
     model_config = ConfigDict(
         extra="forbid",  # 未定義フィールドを即座に拒否
@@ -447,11 +524,7 @@ class TransactionEligibilityRequest(BaseModel):
     @field_validator('data_id_list')
     @classmethod
     def validate_data_id_list_elements(cls, v: List[str]) -> List[str]:
-        """データIDリストの各要素が空文字でないことを検証"""
-        for i, item in enumerate(v):
-            if not item or not item.strip():
-                raise ValueError(f'data_id_list[{i}] must not be empty')
-        return v
+        return _validate_data_id_list(v)
 
     model_config = ConfigDict(
         extra="forbid",  # 未定義フィールドを即座に拒否
@@ -461,6 +534,11 @@ class TransactionEligibilityRequest(BaseModel):
 class TransactionEligibilityResponse(BaseModel):
     status: TransactionEligibility = Field(..., description="取引可否(allowed:取引可, denied:取引不可)")
     detail: str = Field(..., description="処理成否詳細")
+    tracking_id: Optional[str] = Field(
+        None,
+        description="このデータ交換を識別するトラッキングID（X-TrackingId）。"
+                    "データ交換状態登録API では同じ値を tracking_id に指定すること"
+    )
 
 # --------------------------------------------------------------------
 # 利用料モデルなし
@@ -472,8 +550,14 @@ class TransactionEligibilityNonFeeModelRequest(BaseModel):
     payment_service_id: UUID = Field(..., description="決済サービスID")
     tax_classification: TaxClassification = Field(..., description="税区分 (taxable: 課税, non_taxable: 非課税)")
     tax_rate: Decimal = Field(..., description="税率", decimal_places=4, ge=0, le=1)
-    completed_at: datetime = Field(..., description="データ交換処理完了日時（ISO8601）")
-    amount: float = Field(..., description="支払い予定額")
+    completed_at: RequestDateTime = Field(..., description="データ交換処理完了日時（ISO8601。タイムゾーン省略時は UTC）")
+    amount: RequestAmount = Field(..., description="支払い予定額")
+
+    @model_validator(mode='after')
+    def validate_taxed_amount_range(self):
+        """税込金額が DB カラム上限（Numeric(15,2)）を超えないことを検証"""
+        validate_amount_range(self.amount, self.tax_rate, self.tax_classification.value)
+        return self
 
     model_config = ConfigDict(
         extra="forbid",  # 未定義フィールドを即座に拒否
@@ -482,15 +566,41 @@ class TransactionEligibilityNonFeeModelRequest(BaseModel):
 class TransactionEligibilityNonFeeModelResponse(BaseModel):
     status: TransactionEligibility = Field(..., description="取引可否(allowed:取引可, denied:取引不可)")
     detail: str = Field(..., description="処理成否詳細")
+    tracking_id: Optional[str] = Field(
+        None,
+        description="このデータ交換を識別するトラッキングID（X-TrackingId）。"
+                    "取引金額確定API では同じ値を tracking_id（本文または X-TrackingId）に指定すること"
+    )
 
 class DataExchangeNonFeeModelRequest(BaseModel):
+    tracking_id: Optional[str] = Field(
+        None,
+        description="取引可否確認API（利用料モデルなし）が返したトラッキングID（UUID）。"
+                    "省略時は X-TrackingId ヘッダの値を使用する"
+    )
     provider_id: str = Field(..., description="データ提供者ID(外部システムにて発行)", min_length=1, max_length=255)
     consumer_id: str = Field(..., description="データ利用者ID(外部システムにて発行)", min_length=1, max_length=255)
     payment_service_id: UUID = Field(..., description="決済サービスID")
     tax_classification: TaxClassification = Field(..., description="税区分 (taxable: 課税, non_taxable: 非課税)")
     tax_rate: Decimal = Field(..., description="税率", decimal_places=4, ge=0, le=1)
-    completed_at: datetime = Field(..., description="データ交換処理完了日時（ISO8601）")
-    amount: float = Field(..., description="支払い予定額")
+    completed_at: RequestDateTime = Field(..., description="データ交換処理完了日時（ISO8601。タイムゾーン省略時は UTC）")
+    amount: RequestAmount = Field(..., description="支払い予定額")
+
+    @field_validator('tracking_id')
+    @classmethod
+    def validate_tracking_id_format(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return v
+        try:
+            return str(UUID(v))
+        except ValueError:
+            raise ValueError('tracking_id must be a valid UUID')
+
+    @model_validator(mode='after')
+    def validate_taxed_amount_range(self):
+        """税込金額が DB カラム上限（Numeric(15,2)）を超えないことを検証"""
+        validate_amount_range(self.amount, self.tax_rate, self.tax_classification.value)
+        return self
 
     model_config = ConfigDict(
         extra="forbid",  # 未定義フィールドを即座に拒否
@@ -546,6 +656,7 @@ class ConsumerTransactionItem(BaseModel):
     request_date: Optional[datetime] = Field(None, description="請求日")
     payment_deadline: Optional[datetime] = Field(None, description="支払期限")
     paid_at: Optional[datetime] = Field(None, description="支払完了日時")
+    completed_at: Optional[datetime] = Field(None, description="データ交換完了日時")
     created_at: datetime = Field(..., description="登録日時")
     updated_at: datetime = Field(..., description="更新日時")
 

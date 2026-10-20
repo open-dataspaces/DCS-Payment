@@ -147,7 +147,8 @@ docker compose up --build
 
 | 変数名 | デフォルト値 | 説明 |
 |---|---|---|
-| `X_PAYMENT_API_KEY` | `dev-payment-api-key` | API キー |
+| `X_PAYMENT_API_KEY` | `dev-payment-api-key` | API キー（リクエストヘッダ `X-Payment-API-Key` の値と照合）。未設定の場合はすべてのリクエストを拒否する |
+| `ALLOWED_HOSTS` | `http://localhost:3000` | CORS で許可するオリジン（カンマ区切り、または JSON 配列）。アプリ既定値は空（許可なし） |
 
 ### L3 認証設定
 
@@ -159,20 +160,23 @@ docker compose up --build
 | `L3_CLIENT_ID` | `dev-client-id` | L3 クライアント ID |
 | `L3_CLIENT_SECRET` | `dev-client-secret` | L3 クライアントシークレット |
 
-### 認可サービス設定（OpenFGA）(独自で構築する場合のみ)
+### 認可サービス設定（L3 認可判定API）
 
 | 変数名 | デフォルト値 | 説明 |
 |---|---|---|
 | `AUTHZ_ENABLED` | `false` | 認可チェック有効/無効 |
-| `AUTHZ_BASE_URL` | `http://openfga:8080` | OpenFGA サーバー URL |
-| `AUTHZ_OPENFGA_STORE_ID` | `01KEVMH7G43T...` | ストア ID |
-| `AUTHZ_OPENFGA_MODEL_ID` | `01KEVMH7GK0B...` | モデル ID |
+| `AUTHZ_STORE_ID` | `01KEVMH7G43T...` | 精算決済の API 実行権限を登録した L3 の認可ストア ID |
+| `L3_AUTHZ_EVALUATION_ENDPOINT` | `/authz/stores/{store_id}/access/v1/evaluation` | L3 の認可判定 API（AuthZEN）のパス |
+
+認可確認は L3 の認可判定 API を経由して行います（接続先・API キーは `L3_BASE_URL`・`L3_API_KEY` を使用）。`L3_API_KEY` のレルムが、`AUTHZ_STORE_ID` の認可ストアに紐付けられている必要があります。
 
 ### 外部決済サービス設定（NP掛け払いと連携する場合のみ使用)
 
 | 変数名 | デフォルト値 | 説明 |
 |---|---|---|
 | `EXTERNAL_PAYMENT_ENABLED` | `false` | 外部決済API呼出しの有効/無効 |
+| `L2_LOG_LOOKBACK_DAYS` | `7`（CronJob） | L2ログ突合 CronJob が pending 取引を照合し続ける最大日数。超過した取引は l2_http_status=timeout となり NP 取引がキャンセルされる |
+| `L2_HTTP_STATUS_FILTER_ENABLED` | `false`（アプリ既定値は `true`） | 支払/請求予定額に L2ログ突合で成功確認済み（l2_http_status が 2xx）の取引のみ含めるか。L2ログ突合 CronJob を運用する本番環境では `true` にすること。`false` でも settlement_status=cancelled の取引は含めない |
 | `NP_KAKEBARAI_BASE_URL` | `http://np-kakebarai-mock-api:8000` | NP掛け払いAPI URL |
 | `NP_KAKEBARAI_SHOP_CODE` | `cbs0138430` | ショップコード |
 | `NP_KAKEBARAI_SP_CODE` | `sp00138430` | SP コード |
@@ -189,7 +193,10 @@ docker compose up --build
 | `POSTGRES_USER` | `postgres` | DB ユーザー |
 | `POSTGRES_PASSWORD` | `postgres` | DB パスワード |
 | `DB_CONNECT_TIMEOUT` | `10` | 接続タイムアウト（秒） |
+| `DB_POOL_SIZE` | `5` | 接続プールに保持する接続数 |
+| `DB_MAX_OVERFLOW` | `10` | `DB_POOL_SIZE` を超えて一時的に作る接続数（同時に処理できるリクエスト数の上限は合計） |
 | `DB_POOL_TIMEOUT` | `10` | プールタイムアウト（秒） |
+| `DB_LOCK_TIMEOUT` | `3` | 取引の行ロック待ちタイムアウト（秒、1 以上）。超過時は 503（`Retry-After` 付き）を返す |
 
 ### ログ設定
 

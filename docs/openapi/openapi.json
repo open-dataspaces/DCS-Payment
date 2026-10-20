@@ -35,7 +35,7 @@
             "required": true,
             "schema": {
               "type": "string",
-              "title": "X-Trackingid"
+              "title": "X-TrackingId"
             }
           },
           {
@@ -53,18 +53,18 @@
             "in": "header",
             "required": true,
             "schema": {
-              "const": "application/json",
               "type": "string",
+              "pattern": "(?i)^application/json\\s*(;.*)?$",
               "title": "Content-Type"
             }
           },
           {
-            "name": "x-payment-api-key",
+            "name": "X-Payment-API-Key",
             "in": "header",
             "required": true,
             "schema": {
               "type": "string",
-              "title": "X-Payment-Api-Key"
+              "title": "X-Payment-API-Key"
             }
           }
         ],
@@ -222,6 +222,53 @@
           },
           "403": {
             "description": "認可エラー",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "Cache-Control": {
+                "description": "キャッシュ制御指示",
+                "schema": {
+                  "type": "string",
+                  "example": "no-cache, no-store, must-revalidate"
+                }
+              },
+              "X-TrackingId": {
+                "description": "リクエストトラッキング用UUID",
+                "schema": {
+                  "type": "string",
+                  "example": "550e8400-e29b-41d4-a716-446655440000"
+                }
+              },
+              "Content-Security-Policy": {
+                "description": "XSS対策",
+                "schema": {
+                  "type": "string",
+                  "example": "default-src 'self'"
+                }
+              },
+              "X-Content-Type-Options": {
+                "description": "MIMEスニッフィング防止",
+                "schema": {
+                  "type": "string",
+                  "example": "nosniff"
+                }
+              },
+              "Strict-Transport-Security": {
+                "description": "HTTPS強制",
+                "schema": {
+                  "type": "string",
+                  "example": "max-age=63072000; includeSubDomains"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "決済サービスが未登録",
             "content": {
               "application/json": {
                 "schema": {
@@ -438,7 +485,7 @@
             "required": true,
             "schema": {
               "type": "string",
-              "title": "X-Trackingid"
+              "title": "X-TrackingId"
             }
           },
           {
@@ -456,18 +503,18 @@
             "in": "header",
             "required": true,
             "schema": {
-              "const": "application/json",
               "type": "string",
+              "pattern": "(?i)^application/json\\s*(;.*)?$",
               "title": "Content-Type"
             }
           },
           {
-            "name": "x-payment-api-key",
+            "name": "X-Payment-API-Key",
             "in": "header",
             "required": true,
             "schema": {
               "type": "string",
-              "title": "X-Payment-Api-Key"
+              "title": "X-Payment-API-Key"
             }
           }
         ],
@@ -842,6 +889,506 @@
       }
     },
     "/api/v1/fee-model/{fee_model_id}": {
+      "get": {
+        "tags": [
+          "精算決済"
+        ],
+        "summary": "利用料モデル取得API",
+        "description": "指定した利用料モデルを取得します。",
+        "operationId": "get_fee_model_api_v1_fee_model__fee_model_id__get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "fee_model_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Fee Model Id"
+            }
+          },
+          {
+            "name": "User-Agent",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "User-Agent"
+            }
+          },
+          {
+            "name": "X-TrackingId",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "X-TrackingId"
+            }
+          },
+          {
+            "name": "Accept-Language",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "ja-JP",
+              "title": "Accept-Language"
+            }
+          },
+          {
+            "name": "Content-Type",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "(?i)^application/json\\s*(;.*)?$",
+              "title": "Content-Type"
+            }
+          },
+          {
+            "name": "X-Payment-API-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "X-Payment-API-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FeeModelResponse"
+                }
+              }
+            },
+            "headers": {
+              "Cache-Control": {
+                "description": "キャッシュ制御指示",
+                "schema": {
+                  "type": "string",
+                  "example": "no-cache, no-store, must-revalidate"
+                }
+              },
+              "X-TrackingId": {
+                "description": "リクエストトラッキング用UUID",
+                "schema": {
+                  "type": "string",
+                  "example": "550e8400-e29b-41d4-a716-446655440000"
+                }
+              },
+              "Content-Security-Policy": {
+                "description": "XSS対策",
+                "schema": {
+                  "type": "string",
+                  "example": "default-src 'self'"
+                }
+              },
+              "X-Content-Type-Options": {
+                "description": "MIMEスニッフィング防止",
+                "schema": {
+                  "type": "string",
+                  "example": "nosniff"
+                }
+              },
+              "Strict-Transport-Security": {
+                "description": "HTTPS強制",
+                "schema": {
+                  "type": "string",
+                  "example": "max-age=63072000; includeSubDomains"
+                }
+              },
+              "ETag": {
+                "description": "リソースのバージョン識別子",
+                "schema": {
+                  "type": "string",
+                  "example": "\"abc123etagvalue\""
+                }
+              },
+              "Last-Modified": {
+                "description": "リソースの最終更新日時",
+                "schema": {
+                  "type": "string",
+                  "example": "Wed, 30 Jul 2025 01:00:00 GMT"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "パラメータエラー",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "Cache-Control": {
+                "description": "キャッシュ制御指示",
+                "schema": {
+                  "type": "string",
+                  "example": "no-cache, no-store, must-revalidate"
+                }
+              },
+              "X-TrackingId": {
+                "description": "リクエストトラッキング用UUID",
+                "schema": {
+                  "type": "string",
+                  "example": "550e8400-e29b-41d4-a716-446655440000"
+                }
+              },
+              "Content-Security-Policy": {
+                "description": "XSS対策",
+                "schema": {
+                  "type": "string",
+                  "example": "default-src 'self'"
+                }
+              },
+              "X-Content-Type-Options": {
+                "description": "MIMEスニッフィング防止",
+                "schema": {
+                  "type": "string",
+                  "example": "nosniff"
+                }
+              },
+              "Strict-Transport-Security": {
+                "description": "HTTPS強制",
+                "schema": {
+                  "type": "string",
+                  "example": "max-age=63072000; includeSubDomains"
+                }
+              },
+              "ETag": {
+                "description": "リソースのバージョン識別子",
+                "schema": {
+                  "type": "string",
+                  "example": "\"abc123etagvalue\""
+                }
+              },
+              "Last-Modified": {
+                "description": "リソースの最終更新日時",
+                "schema": {
+                  "type": "string",
+                  "example": "Wed, 30 Jul 2025 01:00:00 GMT"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "認証エラー",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "Cache-Control": {
+                "description": "キャッシュ制御指示",
+                "schema": {
+                  "type": "string",
+                  "example": "no-cache, no-store, must-revalidate"
+                }
+              },
+              "X-TrackingId": {
+                "description": "リクエストトラッキング用UUID",
+                "schema": {
+                  "type": "string",
+                  "example": "550e8400-e29b-41d4-a716-446655440000"
+                }
+              },
+              "Content-Security-Policy": {
+                "description": "XSS対策",
+                "schema": {
+                  "type": "string",
+                  "example": "default-src 'self'"
+                }
+              },
+              "X-Content-Type-Options": {
+                "description": "MIMEスニッフィング防止",
+                "schema": {
+                  "type": "string",
+                  "example": "nosniff"
+                }
+              },
+              "Strict-Transport-Security": {
+                "description": "HTTPS強制",
+                "schema": {
+                  "type": "string",
+                  "example": "max-age=63072000; includeSubDomains"
+                }
+              },
+              "ETag": {
+                "description": "リソースのバージョン識別子",
+                "schema": {
+                  "type": "string",
+                  "example": "\"abc123etagvalue\""
+                }
+              },
+              "Last-Modified": {
+                "description": "リソースの最終更新日時",
+                "schema": {
+                  "type": "string",
+                  "example": "Wed, 30 Jul 2025 01:00:00 GMT"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "認可エラー",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "Cache-Control": {
+                "description": "キャッシュ制御指示",
+                "schema": {
+                  "type": "string",
+                  "example": "no-cache, no-store, must-revalidate"
+                }
+              },
+              "X-TrackingId": {
+                "description": "リクエストトラッキング用UUID",
+                "schema": {
+                  "type": "string",
+                  "example": "550e8400-e29b-41d4-a716-446655440000"
+                }
+              },
+              "Content-Security-Policy": {
+                "description": "XSS対策",
+                "schema": {
+                  "type": "string",
+                  "example": "default-src 'self'"
+                }
+              },
+              "X-Content-Type-Options": {
+                "description": "MIMEスニッフィング防止",
+                "schema": {
+                  "type": "string",
+                  "example": "nosniff"
+                }
+              },
+              "Strict-Transport-Security": {
+                "description": "HTTPS強制",
+                "schema": {
+                  "type": "string",
+                  "example": "max-age=63072000; includeSubDomains"
+                }
+              },
+              "ETag": {
+                "description": "リソースのバージョン識別子",
+                "schema": {
+                  "type": "string",
+                  "example": "\"abc123etagvalue\""
+                }
+              },
+              "Last-Modified": {
+                "description": "リソースの最終更新日時",
+                "schema": {
+                  "type": "string",
+                  "example": "Wed, 30 Jul 2025 01:00:00 GMT"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "該当データなし",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "Cache-Control": {
+                "description": "キャッシュ制御指示",
+                "schema": {
+                  "type": "string",
+                  "example": "no-cache, no-store, must-revalidate"
+                }
+              },
+              "X-TrackingId": {
+                "description": "リクエストトラッキング用UUID",
+                "schema": {
+                  "type": "string",
+                  "example": "550e8400-e29b-41d4-a716-446655440000"
+                }
+              },
+              "Content-Security-Policy": {
+                "description": "XSS対策",
+                "schema": {
+                  "type": "string",
+                  "example": "default-src 'self'"
+                }
+              },
+              "X-Content-Type-Options": {
+                "description": "MIMEスニッフィング防止",
+                "schema": {
+                  "type": "string",
+                  "example": "nosniff"
+                }
+              },
+              "Strict-Transport-Security": {
+                "description": "HTTPS強制",
+                "schema": {
+                  "type": "string",
+                  "example": "max-age=63072000; includeSubDomains"
+                }
+              },
+              "ETag": {
+                "description": "リソースのバージョン識別子",
+                "schema": {
+                  "type": "string",
+                  "example": "\"abc123etagvalue\""
+                }
+              },
+              "Last-Modified": {
+                "description": "リソースの最終更新日時",
+                "schema": {
+                  "type": "string",
+                  "example": "Wed, 30 Jul 2025 01:00:00 GMT"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "サーバエラー",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "Cache-Control": {
+                "description": "キャッシュ制御指示",
+                "schema": {
+                  "type": "string",
+                  "example": "no-cache, no-store, must-revalidate"
+                }
+              },
+              "X-TrackingId": {
+                "description": "リクエストトラッキング用UUID",
+                "schema": {
+                  "type": "string",
+                  "example": "550e8400-e29b-41d4-a716-446655440000"
+                }
+              },
+              "Content-Security-Policy": {
+                "description": "XSS対策",
+                "schema": {
+                  "type": "string",
+                  "example": "default-src 'self'"
+                }
+              },
+              "X-Content-Type-Options": {
+                "description": "MIMEスニッフィング防止",
+                "schema": {
+                  "type": "string",
+                  "example": "nosniff"
+                }
+              },
+              "Strict-Transport-Security": {
+                "description": "HTTPS強制",
+                "schema": {
+                  "type": "string",
+                  "example": "max-age=63072000; includeSubDomains"
+                }
+              },
+              "ETag": {
+                "description": "リソースのバージョン識別子",
+                "schema": {
+                  "type": "string",
+                  "example": "\"abc123etagvalue\""
+                }
+              },
+              "Last-Modified": {
+                "description": "リソースの最終更新日時",
+                "schema": {
+                  "type": "string",
+                  "example": "Wed, 30 Jul 2025 01:00:00 GMT"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "headers": {
+              "Cache-Control": {
+                "description": "キャッシュ制御指示",
+                "schema": {
+                  "type": "string",
+                  "example": "no-cache, no-store, must-revalidate"
+                }
+              },
+              "X-TrackingId": {
+                "description": "リクエストトラッキング用UUID",
+                "schema": {
+                  "type": "string",
+                  "example": "550e8400-e29b-41d4-a716-446655440000"
+                }
+              },
+              "Content-Security-Policy": {
+                "description": "XSS対策",
+                "schema": {
+                  "type": "string",
+                  "example": "default-src 'self'"
+                }
+              },
+              "X-Content-Type-Options": {
+                "description": "MIMEスニッフィング防止",
+                "schema": {
+                  "type": "string",
+                  "example": "nosniff"
+                }
+              },
+              "Strict-Transport-Security": {
+                "description": "HTTPS強制",
+                "schema": {
+                  "type": "string",
+                  "example": "max-age=63072000; includeSubDomains"
+                }
+              },
+              "ETag": {
+                "description": "リソースのバージョン識別子",
+                "schema": {
+                  "type": "string",
+                  "example": "\"abc123etagvalue\""
+                }
+              },
+              "Last-Modified": {
+                "description": "リソースの最終更新日時",
+                "schema": {
+                  "type": "string",
+                  "example": "Wed, 30 Jul 2025 01:00:00 GMT"
+                }
+              }
+            }
+          }
+        }
+      },
       "put": {
         "tags": [
           "精算決済"
@@ -879,7 +1426,7 @@
             "required": true,
             "schema": {
               "type": "string",
-              "title": "X-Trackingid"
+              "title": "X-TrackingId"
             }
           },
           {
@@ -897,18 +1444,18 @@
             "in": "header",
             "required": true,
             "schema": {
-              "const": "application/json",
               "type": "string",
+              "pattern": "(?i)^application/json\\s*(;.*)?$",
               "title": "Content-Type"
             }
           },
           {
-            "name": "x-payment-api-key",
+            "name": "X-Payment-API-Key",
             "in": "header",
             "required": true,
             "schema": {
               "type": "string",
-              "title": "X-Payment-Api-Key"
+              "title": "X-Payment-API-Key"
             }
           }
         ],
@@ -1338,7 +1885,7 @@
             "required": true,
             "schema": {
               "type": "string",
-              "title": "X-Trackingid"
+              "title": "X-TrackingId"
             }
           },
           {
@@ -1356,18 +1903,18 @@
             "in": "header",
             "required": true,
             "schema": {
-              "const": "application/json",
               "type": "string",
+              "pattern": "(?i)^application/json\\s*(;.*)?$",
               "title": "Content-Type"
             }
           },
           {
-            "name": "x-payment-api-key",
+            "name": "X-Payment-API-Key",
             "in": "header",
             "required": true,
             "schema": {
               "type": "string",
-              "title": "X-Payment-Api-Key"
+              "title": "X-Payment-API-Key"
             }
           }
         ],
@@ -1773,7 +2320,7 @@
             "required": true,
             "schema": {
               "type": "string",
-              "title": "X-Trackingid"
+              "title": "X-TrackingId"
             }
           },
           {
@@ -1791,18 +2338,18 @@
             "in": "header",
             "required": true,
             "schema": {
-              "const": "application/json",
               "type": "string",
+              "pattern": "(?i)^application/json\\s*(;.*)?$",
               "title": "Content-Type"
             }
           },
           {
-            "name": "x-payment-api-key",
+            "name": "X-Payment-API-Key",
             "in": "header",
             "required": true,
             "schema": {
               "type": "string",
-              "title": "X-Payment-Api-Key"
+              "title": "X-Payment-API-Key"
             }
           }
         ],
@@ -2225,7 +2772,7 @@
             "required": true,
             "schema": {
               "type": "string",
-              "title": "X-Trackingid"
+              "title": "X-TrackingId"
             }
           },
           {
@@ -2243,18 +2790,18 @@
             "in": "header",
             "required": true,
             "schema": {
-              "const": "application/json",
               "type": "string",
+              "pattern": "(?i)^application/json\\s*(;.*)?$",
               "title": "Content-Type"
             }
           },
           {
-            "name": "x-payment-api-key",
+            "name": "X-Payment-API-Key",
             "in": "header",
             "required": true,
             "schema": {
               "type": "string",
-              "title": "X-Payment-Api-Key"
+              "title": "X-Payment-API-Key"
             }
           }
         ],
@@ -2598,6 +3145,53 @@
               }
             }
           },
+          "503": {
+            "description": "他のリクエストが同じ取引を処理中（時間をおいて再送）",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "Cache-Control": {
+                "description": "キャッシュ制御指示",
+                "schema": {
+                  "type": "string",
+                  "example": "no-cache, no-store, must-revalidate"
+                }
+              },
+              "X-TrackingId": {
+                "description": "リクエストトラッキング用UUID",
+                "schema": {
+                  "type": "string",
+                  "example": "550e8400-e29b-41d4-a716-446655440000"
+                }
+              },
+              "Content-Security-Policy": {
+                "description": "XSS対策",
+                "schema": {
+                  "type": "string",
+                  "example": "default-src 'self'"
+                }
+              },
+              "X-Content-Type-Options": {
+                "description": "MIMEスニッフィング防止",
+                "schema": {
+                  "type": "string",
+                  "example": "nosniff"
+                }
+              },
+              "Strict-Transport-Security": {
+                "description": "HTTPS強制",
+                "schema": {
+                  "type": "string",
+                  "example": "max-age=63072000; includeSubDomains"
+                }
+              }
+            }
+          },
           "422": {
             "description": "Validation Error",
             "content": {
@@ -2675,7 +3269,7 @@
             "required": true,
             "schema": {
               "type": "string",
-              "title": "X-Trackingid"
+              "title": "X-TrackingId"
             }
           },
           {
@@ -2693,18 +3287,18 @@
             "in": "header",
             "required": true,
             "schema": {
-              "const": "application/json",
               "type": "string",
+              "pattern": "(?i)^application/json\\s*(;.*)?$",
               "title": "Content-Type"
             }
           },
           {
-            "name": "x-payment-api-key",
+            "name": "X-Payment-API-Key",
             "in": "header",
             "required": true,
             "schema": {
               "type": "string",
-              "title": "X-Payment-Api-Key"
+              "title": "X-Payment-API-Key"
             }
           }
         ],
@@ -3048,6 +3642,53 @@
               }
             }
           },
+          "503": {
+            "description": "他のリクエストが同じ取引を処理中（時間をおいて再送）",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "Cache-Control": {
+                "description": "キャッシュ制御指示",
+                "schema": {
+                  "type": "string",
+                  "example": "no-cache, no-store, must-revalidate"
+                }
+              },
+              "X-TrackingId": {
+                "description": "リクエストトラッキング用UUID",
+                "schema": {
+                  "type": "string",
+                  "example": "550e8400-e29b-41d4-a716-446655440000"
+                }
+              },
+              "Content-Security-Policy": {
+                "description": "XSS対策",
+                "schema": {
+                  "type": "string",
+                  "example": "default-src 'self'"
+                }
+              },
+              "X-Content-Type-Options": {
+                "description": "MIMEスニッフィング防止",
+                "schema": {
+                  "type": "string",
+                  "example": "nosniff"
+                }
+              },
+              "Strict-Transport-Security": {
+                "description": "HTTPS強制",
+                "schema": {
+                  "type": "string",
+                  "example": "max-age=63072000; includeSubDomains"
+                }
+              }
+            }
+          },
           "422": {
             "description": "Validation Error",
             "content": {
@@ -3127,7 +3768,7 @@
             "required": true,
             "schema": {
               "type": "string",
-              "title": "X-Trackingid"
+              "title": "X-TrackingId"
             }
           },
           {
@@ -3145,18 +3786,18 @@
             "in": "header",
             "required": true,
             "schema": {
-              "const": "application/json",
               "type": "string",
+              "pattern": "(?i)^application/json\\s*(;.*)?$",
               "title": "Content-Type"
             }
           },
           {
-            "name": "x-payment-api-key",
+            "name": "X-Payment-API-Key",
             "in": "header",
             "required": true,
             "schema": {
               "type": "string",
-              "title": "X-Payment-Api-Key"
+              "title": "X-Payment-API-Key"
             }
           }
         ],
@@ -3579,7 +4220,7 @@
             "required": true,
             "schema": {
               "type": "string",
-              "title": "X-Trackingid"
+              "title": "X-TrackingId"
             }
           },
           {
@@ -3597,18 +4238,18 @@
             "in": "header",
             "required": true,
             "schema": {
-              "const": "application/json",
               "type": "string",
+              "pattern": "(?i)^application/json\\s*(;.*)?$",
               "title": "Content-Type"
             }
           },
           {
-            "name": "x-payment-api-key",
+            "name": "X-Payment-API-Key",
             "in": "header",
             "required": true,
             "schema": {
               "type": "string",
-              "title": "X-Payment-Api-Key"
+              "title": "X-Payment-API-Key"
             }
           }
         ],
@@ -3952,6 +4593,100 @@
               }
             }
           },
+          "503": {
+            "description": "他のリクエストが同じ取引を処理中（時間をおいて再送）",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "Cache-Control": {
+                "description": "キャッシュ制御指示",
+                "schema": {
+                  "type": "string",
+                  "example": "no-cache, no-store, must-revalidate"
+                }
+              },
+              "X-TrackingId": {
+                "description": "リクエストトラッキング用UUID",
+                "schema": {
+                  "type": "string",
+                  "example": "550e8400-e29b-41d4-a716-446655440000"
+                }
+              },
+              "Content-Security-Policy": {
+                "description": "XSS対策",
+                "schema": {
+                  "type": "string",
+                  "example": "default-src 'self'"
+                }
+              },
+              "X-Content-Type-Options": {
+                "description": "MIMEスニッフィング防止",
+                "schema": {
+                  "type": "string",
+                  "example": "nosniff"
+                }
+              },
+              "Strict-Transport-Security": {
+                "description": "HTTPS強制",
+                "schema": {
+                  "type": "string",
+                  "example": "max-age=63072000; includeSubDomains"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "外部決済サービスエラー",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "Cache-Control": {
+                "description": "キャッシュ制御指示",
+                "schema": {
+                  "type": "string",
+                  "example": "no-cache, no-store, must-revalidate"
+                }
+              },
+              "X-TrackingId": {
+                "description": "リクエストトラッキング用UUID",
+                "schema": {
+                  "type": "string",
+                  "example": "550e8400-e29b-41d4-a716-446655440000"
+                }
+              },
+              "Content-Security-Policy": {
+                "description": "XSS対策",
+                "schema": {
+                  "type": "string",
+                  "example": "default-src 'self'"
+                }
+              },
+              "X-Content-Type-Options": {
+                "description": "MIMEスニッフィング防止",
+                "schema": {
+                  "type": "string",
+                  "example": "nosniff"
+                }
+              },
+              "Strict-Transport-Security": {
+                "description": "HTTPS強制",
+                "schema": {
+                  "type": "string",
+                  "example": "max-age=63072000; includeSubDomains"
+                }
+              }
+            }
+          },
           "422": {
             "description": "Validation Error",
             "content": {
@@ -4031,7 +4766,7 @@
             "required": true,
             "schema": {
               "type": "string",
-              "title": "X-Trackingid"
+              "title": "X-TrackingId"
             }
           },
           {
@@ -4049,18 +4784,18 @@
             "in": "header",
             "required": true,
             "schema": {
-              "const": "application/json",
               "type": "string",
+              "pattern": "(?i)^application/json\\s*(;.*)?$",
               "title": "Content-Type"
             }
           },
           {
-            "name": "x-payment-api-key",
+            "name": "X-Payment-API-Key",
             "in": "header",
             "required": true,
             "schema": {
               "type": "string",
-              "title": "X-Payment-Api-Key"
+              "title": "X-Payment-API-Key"
             }
           }
         ],
@@ -4389,7 +5124,7 @@
             "required": true,
             "schema": {
               "type": "string",
-              "title": "X-Trackingid"
+              "title": "X-TrackingId"
             }
           },
           {
@@ -4407,18 +5142,18 @@
             "in": "header",
             "required": true,
             "schema": {
-              "const": "application/json",
               "type": "string",
+              "pattern": "(?i)^application/json\\s*(;.*)?$",
               "title": "Content-Type"
             }
           },
           {
-            "name": "x-payment-api-key",
+            "name": "X-Payment-API-Key",
             "in": "header",
             "required": true,
             "schema": {
               "type": "string",
-              "title": "X-Payment-Api-Key"
+              "title": "X-Payment-API-Key"
             }
           }
         ],
@@ -4747,7 +5482,7 @@
             "required": true,
             "schema": {
               "type": "string",
-              "title": "X-Trackingid"
+              "title": "X-TrackingId"
             }
           },
           {
@@ -4765,18 +5500,18 @@
             "in": "header",
             "required": true,
             "schema": {
-              "const": "application/json",
               "type": "string",
+              "pattern": "(?i)^application/json\\s*(;.*)?$",
               "title": "Content-Type"
             }
           },
           {
-            "name": "x-payment-api-key",
+            "name": "X-Payment-API-Key",
             "in": "header",
             "required": true,
             "schema": {
               "type": "string",
-              "title": "X-Payment-Api-Key"
+              "title": "X-Payment-API-Key"
             }
           }
         ],
@@ -5143,6 +5878,18 @@
             "type": "number",
             "title": "Tax Rate",
             "description": "税率"
+          },
+          "settlement_status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Settlement Status",
+            "description": "精算状態（settled: L2ログ突合済みで確定, unsettled: 未確定）"
           }
         },
         "type": "object",
@@ -5353,6 +6100,19 @@
             "title": "Paid At",
             "description": "支払完了日時"
           },
+          "completed_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Completed At",
+            "description": "データ交換完了日時"
+          },
           "created_at": {
             "type": "string",
             "format": "date-time",
@@ -5444,6 +6204,18 @@
       },
       "DataExchangeNonFeeModelRequest": {
         "properties": {
+          "tracking_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tracking Id",
+            "description": "取引可否確認API（利用料モデルなし）が返したトラッキングID（UUID）。省略時は X-TrackingId ヘッダの値を使用する"
+          },
           "provider_id": {
             "type": "string",
             "maxLength": 255,
@@ -5487,7 +6259,7 @@
             "type": "string",
             "format": "date-time",
             "title": "Completed At",
-            "description": "データ交換処理完了日時（ISO8601）"
+            "description": "データ交換処理完了日時（ISO8601。タイムゾーン省略時は UTC）"
           },
           "amount": {
             "type": "number",
@@ -5514,7 +6286,7 @@
             "type": "string",
             "minLength": 1,
             "title": "Tracking Id",
-            "description": "トラッキングID"
+            "description": "トラッキングID（UUID）"
           },
           "provider_id": {
             "type": "string",
@@ -5543,7 +6315,7 @@
             "type": "string",
             "format": "date-time",
             "title": "Completed At",
-            "description": "データ交換処理完了日時（ISO8601）"
+            "description": "データ交換処理完了日時（ISO8601。タイムゾーン省略時は UTC）"
           },
           "status": {
             "$ref": "#/components/schemas/DataExchangeStatus",
@@ -5596,7 +6368,7 @@
             "type": "string",
             "minLength": 1,
             "title": "Tracking Id",
-            "description": "トラッキングID"
+            "description": "トラッキングID（UUID）"
           },
           "status": {
             "$ref": "#/components/schemas/DataExchangeStatus",
@@ -6221,6 +6993,18 @@
             "type": "number",
             "title": "Tax Rate",
             "description": "税率"
+          },
+          "settlement_status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Settlement Status",
+            "description": "精算状態（settled: L2ログ突合済みで確定, unsettled: 未確定）"
           }
         },
         "type": "object",
@@ -6380,7 +7164,7 @@
             "type": "string",
             "format": "date-time",
             "title": "Completed At",
-            "description": "データ交換処理完了日時（ISO8601）"
+            "description": "データ交換処理完了日時（ISO8601。タイムゾーン省略時は UTC）"
           },
           "amount": {
             "type": "number",
@@ -6411,6 +7195,18 @@
             "type": "string",
             "title": "Detail",
             "description": "処理成否詳細"
+          },
+          "tracking_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tracking Id",
+            "description": "このデータ交換を識別するトラッキングID（X-TrackingId）。取引金額確定API では同じ値を tracking_id（本文または X-TrackingId）に指定すること"
           }
         },
         "type": "object",
@@ -6465,6 +7261,18 @@
             "type": "string",
             "title": "Detail",
             "description": "処理成否詳細"
+          },
+          "tracking_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tracking Id",
+            "description": "このデータ交換を識別するトラッキングID（X-TrackingId）。データ交換状態登録API では同じ値を tracking_id に指定すること"
           }
         },
         "type": "object",
