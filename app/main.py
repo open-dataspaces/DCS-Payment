@@ -27,7 +27,21 @@ app = FastAPI(
     title=settings.PROJECT_NAME,
     description="""
 ## 変更履歴
+### version 1.2.0  2026/10
+- 利用料モデル取得 API（GET /fee-model/{fee_model_id}）を追加。ETag / Last-Modified による条件付きリクエストに対応
+- 取引可否確認 API で与信 OK 時に取引を事前登録し、`X-TrackingId` の値をレスポンスの `tracking_id` として返すよう変更。データ交換状態登録 API・取引金額確定 API（利用料モデルなし）は本文の `tracking_id` で事前登録行を特定する
+- 与信が必要な決済サービスの取引では、取引可否確認（与信 OK）を経ていないデータ交換状態登録を拒否するよう変更
+- 取引金額確定 API（利用料モデルなし）を冪等にし、取引可否確認時の決済サービス・金額と照合するよう変更
+- 支払予定額・請求予定額 API の期間判定にデータ交換完了日時（`completed_at`）を使用。L2 ログ未確定・失敗・キャンセル済みの取引を既定で含めないよう変更（`L2_HTTP_STATUS_FILTER_ENABLED` の既定値を true に変更）
+- 取引の状態登録・更新・金額確定に行ロックによる排他制御を追加。ロック待ちが `DB_LOCK_TIMEOUT` 秒を超えた場合は 503（`Retry-After` 付き）
+- 認可確認を L3 の認可判定 API 経由に変更（設定項目を `L3_BASE_URL`・`L3_API_KEY`・`AUTHZ_STORE_ID` に変更）
+- API キーのヘッダ名表記を `X-Payment-API-Key` に統一。`X_PAYMENT_API_KEY` 未設定時はすべてのリクエストを拒否
+- CORS の許可オリジンの設定名を `ALLOWED_HOSTS` から `CORS_ALLOWED_ORIGINS` に変更（旧名も読み込む）
+- 税込金額の丸めを一元化し、DB の上限を超える金額を拒否（リクエストの検証で 422。利用料モデルの更新では 400）
+- データ交換状態更新 API で取引当事者以外のオペレータを 400 で拒否
+- 各テーブルの主キーに DB 側の既定値 `gen_random_uuid()` を設定（マイグレーション 005）。SQL で主キーを省略して登録できる
 ### version 1.0.0  2026/02
+- 初版
 """,
     version=settings.VERSION,
     log_level="info",

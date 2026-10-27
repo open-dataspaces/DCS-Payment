@@ -94,7 +94,7 @@ class Settings(BaseSettings):
     # Application
     # ===========================================
     PROJECT_NAME: str = "精算決済API"
-    VERSION: str = "1.0.0"
+    VERSION: str = "1.2.0"
     DEBUG: bool = False
     API_V1_PREFIX: str = "/api/v1"
 

@@ -67,6 +67,19 @@
 - Docker / Docker Compose
 - AWS/ EKS / Kubernetes/ helm
 
+## バージョン 1.2.0 での変更
+
+変更の一覧は API ドキュメント（`/docs`）の変更履歴を参照してください。1.0.0 から利用している場合は、次の互換性に影響する変更を確認してください。
+
+- **トラッキング ID による紐付け**: 取引可否確認 API が返す `tracking_id`（リクエストの `X-TrackingId` と同じ値）を、データ交換状態登録 API・取引金額確定 API（利用料モデルなし）の本文 `tracking_id` に指定してください。取引可否確認・データ取得・データ交換状態登録では同じ `X-TrackingId` を使用します（[詳細設計](docs/detail_design.md)の「トラッキングIDの取り扱い」を参照）。
+- **取引可否確認の必須化**: 与信が必要な決済サービスの取引は、取引可否確認（与信 OK）を経ていないとデータ交換状態登録 API を 404 で拒否します。
+- **支払/請求予定額の対象**: `L2_HTTP_STATUS_FILTER_ENABLED` の既定値が `true` になり、L2 ログで成功を確認できた取引だけを含めます。L2 ログ突合 CronJob を運用しない環境では `false` を設定してください。
+- **認可確認の設定項目**: `AUTHZ_BASE_URL`・`AUTHZ_OPENFGA_STORE_ID`・`AUTHZ_OPENFGA_MODEL_ID` に代えて `L3_BASE_URL`・`L3_API_KEY`・`AUTHZ_STORE_ID` を使用します。
+- **CORS の設定名**: `ALLOWED_HOSTS` に代えて `CORS_ALLOWED_ORIGINS` を使用します（旧名も当面は読み込みます）。
+- **API キーの必須化**: `X_PAYMENT_API_KEY` が未設定の場合はすべてのリクエストを拒否します。
+- **ロック待ちの 503**: 同じ取引を処理中の他のリクエストを `DB_LOCK_TIMEOUT` 秒待っても完了しない場合は 503（`Retry-After` 付き）を返します。
+- **マイグレーション 002〜005 の適用**: 起動前に `alembic upgrade head` を実行してください。
+
 ## ドキュメント
 
 | ドキュメント | 説明 |
