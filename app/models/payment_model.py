@@ -39,6 +39,7 @@ class PaymentService(Base):
         PG_UUID(as_uuid=True),
         primary_key=True,
         default=uuid4,
+        server_default=text("gen_random_uuid()"),
         comment="決済サービスID"
     )
     payment_service_name = Column(
@@ -95,6 +96,7 @@ class FeeModel(Base):
         PG_UUID(as_uuid=True),
         primary_key=True,
         default=uuid4,
+        server_default=text("gen_random_uuid()"),
         comment="利用料モデルID"
     )
     fee_model_name = Column(
@@ -283,6 +285,7 @@ class FeeModelHistory(Base):
         PG_UUID(as_uuid=True),
         primary_key=True,
         default=uuid4,
+        server_default=text("gen_random_uuid()"),
         comment="履歴ID"
     )
     fee_model_id = Column(
@@ -437,6 +440,7 @@ class PaymentServiceUserRegistration(Base):
         PG_UUID(as_uuid=True),
         primary_key=True,
         default=uuid4,
+        server_default=text("gen_random_uuid()"),
         comment="決済サービスユーザID"
     )
     payment_service_id = Column(
@@ -562,6 +566,7 @@ class Transaction(Base):
         PG_UUID(as_uuid=True),
         primary_key=True,
         default=uuid4,
+        server_default=text("gen_random_uuid()"),
         comment="取引ID"
     )
     tracking_id = Column(
