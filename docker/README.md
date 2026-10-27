@@ -148,7 +148,7 @@ docker compose up --build
 | 変数名 | デフォルト値 | 説明 |
 |---|---|---|
 | `X_PAYMENT_API_KEY` | `dev-payment-api-key` | API キー（リクエストヘッダ `X-Payment-API-Key` の値と照合）。未設定の場合はすべてのリクエストを拒否する |
-| `ALLOWED_HOSTS` | `http://localhost:3000` | CORS で許可するオリジン（カンマ区切り、または JSON 配列）。アプリ既定値は空（許可なし） |
+| `CORS_ALLOWED_ORIGINS` | `http://localhost:3000` | CORS で許可するオリジン（カンマ区切り、または JSON 配列）。アプリ既定値は空（許可なし）。1.0.0 の `ALLOWED_HOSTS` も経過措置として読み込む（両方設定した場合は `CORS_ALLOWED_ORIGINS` を優先） |
 | `OPERATOR_ID_VERIFICATION_ENABLED` | `false`（アプリ既定値は `true`） | リクエスト本文の `consumer_id` / `provider_id` がアクセストークンの `operator_id` と一致するかを検証するか。`ENVIRONMENT` が `DEVELOP` の場合は値にかかわらず検証しない。本番環境では `ENVIRONMENT` を `PRODUCTION`、本変数を `true` にすること |
 
 ### L3 認証設定

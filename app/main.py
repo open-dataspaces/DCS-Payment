@@ -1,4 +1,6 @@
 """FastAPI Application Entry Point"""
+import os
+
 from app.core.logging import setup_logging, get_logger
 
 setup_logging()
@@ -45,7 +47,9 @@ app = FastAPI(
 # ========================================
 # CORS設定: allow_credentials=Trueの場合、allow_origins=["*"]は使用不可
 # セキュリティ上、具体的なオリジンを指定すること
-cors_origins = settings.ALLOWED_HOSTS if settings.ALLOWED_HOSTS else []
+cors_origins = settings.CORS_ALLOWED_ORIGINS if settings.CORS_ALLOWED_ORIGINS else []
+if os.environ.get("ALLOWED_HOSTS") and not os.environ.get("CORS_ALLOWED_ORIGINS"):
+    logger.warning("ALLOWED_HOSTS is deprecated; use CORS_ALLOWED_ORIGINS for the CORS allowed origins")
 if "*" in cors_origins and settings.IS_PRODUCTION:
     logger.warning("CORS: Wildcard origin '*' is not recommended in production")
 
