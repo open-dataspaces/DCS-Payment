@@ -149,6 +149,7 @@ docker compose up --build
 |---|---|---|
 | `X_PAYMENT_API_KEY` | `dev-payment-api-key` | API キー（リクエストヘッダ `X-Payment-API-Key` の値と照合）。未設定の場合はすべてのリクエストを拒否する |
 | `ALLOWED_HOSTS` | `http://localhost:3000` | CORS で許可するオリジン（カンマ区切り、または JSON 配列）。アプリ既定値は空（許可なし） |
+| `OPERATOR_ID_VERIFICATION_ENABLED` | `false`（アプリ既定値は `true`） | リクエスト本文の `consumer_id` / `provider_id` がアクセストークンの `operator_id` と一致するかを検証するか。`ENVIRONMENT` が `DEVELOP` の場合は値にかかわらず検証しない。本番環境では `ENVIRONMENT` を `PRODUCTION`、本変数を `true` にすること |
 
 ### L3 認証設定
 
@@ -168,7 +169,32 @@ docker compose up --build
 | `AUTHZ_STORE_ID` | `01KEVMH7G43T...` | 精算決済の API 実行権限を登録した L3 の認可ストア ID |
 | `L3_AUTHZ_EVALUATION_ENDPOINT` | `/authz/stores/{store_id}/access/v1/evaluation` | L3 の認可判定 API（AuthZEN）のパス |
 
-認可確認は L3 の認可判定 API を経由して行います（接続先・API キーは `L3_BASE_URL`・`L3_API_KEY` を使用）。`L3_API_KEY` のレルムが、`AUTHZ_STORE_ID` の認可ストアに紐付けられている必要があります。
+認可確認は L3 の認可判定 API を経由して行います（接続先・API キーは `L3_BASE_URL`・`L3_API_KEY` を使用）。
+
+#### 認可を有効にする手順
+
+1. L3 側で以下を準備する
+   - 認可ストアを作成し、認可モデルを登録する。認可モデルには `api_endpoint` 型と、`user` 型からの `can_access` 関係を定義する
+   - 各 API の実行権限のタプル（`user:{operator_id}` が `api_endpoint:{エンドポイント名}` に対して `can_access` を持つ）を登録する。エンドポイント名は下表のとおり
+   - `L3_API_KEY` のレルムを、作成した認可ストアに紐付ける
+2. 本サービスの環境変数で `AUTHZ_ENABLED` を `true` にし、`L3_BASE_URL`・`L3_API_KEY`・`AUTHZ_STORE_ID` を設定する
+
+| API（`/api/v1` 配下） | エンドポイント名（`api_endpoint` の ID） |
+|---|---|
+| POST /fee-model | `fee-model-post` |
+| GET /fee-model, GET /fee-model/{fee_model_id} | `fee-model-get` |
+| PUT /fee-model/{fee_model_id} | `fee-model-put` |
+| DELETE /fee-model/{fee_model_id} | `fee-model-delete` |
+| POST /data-exchange/transaction/eligibility | `eligibility-post` |
+| POST /data-exchange/status | `data-exchange-post` |
+| PUT /data-exchange/status | `data-exchange-put` |
+| POST /data-exchange/non-fee-model/transaction/eligibility | `eligibility-non-fee-model-post` |
+| POST /data-exchange/non-fee-model/confirm | `data-exchange-non-fee-model-post` |
+| POST /data-exchange/settlement/transactions | `data-exchange-transactions-post` |
+| POST /payment | `payment-post` |
+| POST /billing | `billing-post` |
+
+エンドポイント名は、コード中の権限名（`fee-model:post` など）の `:` を `-` に置き換えたものです（OpenFGA のオブジェクト ID に `:` を使えないため）。
 
 ### 外部決済サービス設定（NP掛け払いと連携する場合のみ使用)
 
