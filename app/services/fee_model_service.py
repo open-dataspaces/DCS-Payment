@@ -315,7 +315,7 @@ class FeeModelService:
 
             # 金額に関わる項目を変更する場合、部分更新後の値で税込金額が DB カラム上限を
             # 超えないことを検証する（price だけ・tax_rate だけの更新では schema 側で検証できないため）。
-            # 金額に触れない更新（無効化など）は、旧仕様で登録された範囲外の行でも受け付ける。
+            # 金額に触れない更新（無効化など）は、範囲外の既存の行でも受け付ける。
             if {"price", "tax_rate", "tax_classification"} & set(updated_fields):
                 try:
                     validate_amount_range(

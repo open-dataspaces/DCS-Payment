@@ -94,7 +94,7 @@ class TransactionRegistrationResult:
         self.raw_response = raw_response
         self.items: list[TransactionItemResult] = items or []
         first = self.items[0] if self.items else None
-        # 後方互換: 先頭 item の値
+        # 単一 item の取引向けに、先頭 item の値も持つ
         self.authori_result = authori_result if authori_result is not None else (first.authori_result if first else None)
         self.authori_ng_reason = authori_ng_reason if authori_ng_reason is not None else (first.authori_ng_reason if first else None)
         self.external_transaction_id = external_transaction_id if external_transaction_id is not None else (first.external_transaction_id if first else None)

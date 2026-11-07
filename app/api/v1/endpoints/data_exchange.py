@@ -603,10 +603,7 @@ def confirm_data_exchange(
     service = TransactionService(db)
     try:
         # 取引登録を含むデータ交換取引金額確定を実行
-        result = service.confirm_data_exchange_non_fee_model(
-            request,
-            tracking_id_header=request_id,
-        )
+        result = service.confirm_data_exchange_non_fee_model(request)
 
         logger.info(
             "Data exchange confirmed (non fee model)",
@@ -660,7 +657,7 @@ def confirm_data_exchange(
     except LockTimeoutError as e:
         logger.warning(
             "Request failed - transaction is being processed by another request",
-            tracking_id=request.tracking_id or request_id,
+            tracking_id=request.tracking_id,
             error=str(e),
             status_code=503
         )

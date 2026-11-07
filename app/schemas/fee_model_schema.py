@@ -15,8 +15,7 @@ def _assume_utc_if_naive(v: datetime) -> datetime:
     """タイムゾーンなしの日時は UTC とみなす
 
     DB（timestamptz）や既存データとの比較で aware / naive が混在すると TypeError になるため、
-    リクエストの日時は必ず aware にそろえる。従来も naive の値は DB セッションの
-    タイムゾーン（UTC）として保存されていたため、それに合わせる。
+    リクエストの日時は必ず aware にそろえる（DB セッションのタイムゾーンと同じ UTC とみなす）。
     """
     return v.replace(tzinfo=timezone.utc) if v.tzinfo is None else v
 
@@ -28,7 +27,7 @@ RequestDateTime = Annotated[datetime, AfterValidator(_assume_utc_if_naive)]
 def _amount_to_decimal(v: float) -> Decimal:
     """リクエストの金額（float）を Decimal にし、小数 2 桁に四捨五入する
 
-    前回リリースと同じく数値をそのまま受け付け（小数 3 桁以上も可）、DB カラム（Numeric(15,2)）と
+    数値をそのまま受け付け（小数 3 桁以上も可）、DB カラム（Numeric(15,2)）と
     同じ桁・同じ丸め（四捨五入）にそろえる。丸めた値を DB 保存・NP 送信の両方に使うため値が一致する。
     """
     d = to_decimal(v)
@@ -37,7 +36,7 @@ def _amount_to_decimal(v: float) -> Decimal:
     return d.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
 
-# 利用料モデルなしの金額。OpenAPI 上は前回リリースと同じ number のまま、受け取った値は Decimal にする
+# 利用料モデルなしの金額。OpenAPI 上は number、受け取った値は Decimal にする
 # （0・負の値も可。範囲 ±MAX_AMOUNT・税込金額の範囲は validate_amount_range で検証する）
 RequestAmount = Annotated[float, AfterValidator(_amount_to_decimal)]
 
@@ -121,7 +120,7 @@ class FeeModelCoreFields(BaseModel):
     """利用料モデルのコアフィールド（更新可能）"""
 
     # 金額の範囲（±MAX_AMOUNT 以内・税込で DB カラム上限以内）は入力時のみ検証する（FeeModelCreateRequest）。
-    # レスポンスでも検証すると、旧仕様で登録された範囲外の行が1件あるだけで一覧取得が 500 になるため。
+    # レスポンスでも検証すると、範囲外の既存の行が1件あるだけで一覧取得が 500 になるため。
     fee_model_name: str = Field(..., description="利用料モデル名", min_length=1, max_length=255)
     price: Decimal = Field(..., description="金額")
     tax_classification: TaxClassification = Field(
@@ -477,7 +476,12 @@ def _validate_tracking_id(v: str) -> str:
 
 class DataExchangeRequest(BaseModel):
 
-    tracking_id: str = Field(..., description="トラッキングID（UUID）", min_length=1)
+    tracking_id: str = Field(
+        ...,
+        description="トラッキングID（UUID）。データ取得の呼び出しの X-TrackingId を指定する"
+                    "（取引可否確認の X-TrackingId は指定できない）",
+        min_length=1,
+    )
     provider_id: str = Field(..., description="データ提供者ID", min_length=1, max_length=255)
     consumer_id: str = Field(..., description="データ利用者ID", min_length=1, max_length=255)
     data_id_list: List[str] = Field(..., description="データIDのリスト(外部システムにて発行)", min_length=1)
@@ -534,11 +538,6 @@ class TransactionEligibilityRequest(BaseModel):
 class TransactionEligibilityResponse(BaseModel):
     status: TransactionEligibility = Field(..., description="取引可否(allowed:取引可, denied:取引不可)")
     detail: str = Field(..., description="処理成否詳細")
-    tracking_id: Optional[str] = Field(
-        None,
-        description="このデータ交換を識別するトラッキングID（X-TrackingId）。"
-                    "データ交換状態登録API では同じ値を tracking_id に指定すること"
-    )
 
 # --------------------------------------------------------------------
 # 利用料モデルなし
@@ -566,17 +565,12 @@ class TransactionEligibilityNonFeeModelRequest(BaseModel):
 class TransactionEligibilityNonFeeModelResponse(BaseModel):
     status: TransactionEligibility = Field(..., description="取引可否(allowed:取引可, denied:取引不可)")
     detail: str = Field(..., description="処理成否詳細")
-    tracking_id: Optional[str] = Field(
-        None,
-        description="このデータ交換を識別するトラッキングID（X-TrackingId）。"
-                    "取引金額確定API では同じ値を tracking_id（本文または X-TrackingId）に指定すること"
-    )
 
 class DataExchangeNonFeeModelRequest(BaseModel):
-    tracking_id: Optional[str] = Field(
-        None,
-        description="取引可否確認API（利用料モデルなし）が返したトラッキングID（UUID）。"
-                    "省略時は X-TrackingId ヘッダの値を使用する"
+    tracking_id: str = Field(
+        ...,
+        description="トラッキングID（UUID）。データ取得の呼び出しの X-TrackingId を指定する"
+                    "（取引可否確認の X-TrackingId は指定できない）"
     )
     provider_id: str = Field(..., description="データ提供者ID(外部システムにて発行)", min_length=1, max_length=255)
     consumer_id: str = Field(..., description="データ利用者ID(外部システムにて発行)", min_length=1, max_length=255)
@@ -588,9 +582,7 @@ class DataExchangeNonFeeModelRequest(BaseModel):
 
     @field_validator('tracking_id')
     @classmethod
-    def validate_tracking_id_format(cls, v: Optional[str]) -> Optional[str]:
-        if v is None:
-            return v
+    def validate_tracking_id_format(cls, v: str) -> str:
         try:
             return str(UUID(v))
         except ValueError:

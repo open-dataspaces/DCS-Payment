@@ -6,10 +6,11 @@ SQLAlchemyの例外を独自の例外に変換して上位層に伝播
 """
 
 from datetime import date, datetime, time, timedelta, timezone
+from decimal import Decimal
 from typing import List, Optional, Tuple
 from uuid import UUID
 
-from sqlalchemy import text
+from sqlalchemy import func, or_, text
 from sqlalchemy.exc import IntegrityError as SQLIntegrityError
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.exc import StaleDataError
@@ -546,12 +547,9 @@ class TransactionRepository:
 
         query = self.db.query(Transaction).filter(Transaction.tracking_id == tracking_id)
         if for_update:
-            # ロック待ちの上限を設ける（このトランザクションの間だけ有効）。CronJob が NP 呼び出し中に
-            # ロックを保持している場合などに待ち続けないよう、超過時は LockTimeoutError（503・再送可）にする
-            self.db.execute(
-                text("SELECT set_config('lock_timeout', :timeout, true)"),
-                {"timeout": f"{settings.DB_LOCK_TIMEOUT}s"},
-            )
+            # CronJob が NP 呼び出し中にロックを保持している場合などに待ち続けないよう、
+            # 待ちの上限を超えたら LockTimeoutError（503・再送可）にする
+            self._set_lock_timeout()
             # ロック順序を固定してデッドロックを避ける
             query = query.order_by(Transaction.transaction_id).with_for_update()
         transactions = query.all()
@@ -562,6 +560,128 @@ class TransactionRepository:
             count=len(transactions)
         )
         return transactions
+
+    @wrap_database_error
+    def get_all_using_tracking_id(self, tracking_id: UUID) -> List[Transaction]:
+        """この値を取引可否確認の X-TrackingId（eligibility_tracking_id）、またはデータ交換の
+        tracking_id として使っている取引を取得する
+
+        取引可否確認の再送の判定に使う。事前登録をデータ交換に引き当てて tracking_id を
+        付け替えた後も、同じ取引可否確認で事前登録した行を見つける。
+        """
+        transactions = (
+            self.db.query(Transaction)
+            .filter(or_(
+                Transaction.tracking_id == tracking_id,
+                Transaction.eligibility_tracking_id == tracking_id,
+            ))
+            .all()
+        )
+        logger.debug(
+            "Transactions using tracking ID found",
+            tracking_id=str(tracking_id),
+            count=len(transactions),
+        )
+        return transactions
+
+    @wrap_database_error
+    def exists_by_eligibility_tracking_id(self, tracking_id: UUID) -> bool:
+        """この値を X-TrackingId とする取引可否確認で事前登録した取引があるか（引き当て済みを含む）"""
+        query = self.db.query(Transaction).filter(Transaction.eligibility_tracking_id == tracking_id)
+        return self.db.query(query.exists()).scalar()
+
+    @wrap_database_error
+    def lock_tracking_id(self, tracking_id: UUID) -> None:
+        """同じ tracking_id への状態登録・金額確定を直列化する（トランザクション終了まで保持）
+
+        最初の報告では tracking_id の行がまだ無く、行ロックでは排他できないため、
+        tracking_id 単位の advisory lock を取る。提供者・利用者の報告が同時に届いても、
+        後の報告は先の報告が事前登録を引き当てた結果を見て処理する。
+        """
+        self._set_lock_timeout()
+        self.db.execute(
+            text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"),
+            {"key": f"transactions.tracking_id:{tracking_id}"},
+        )
+
+    @wrap_database_error
+    def lock_unlinked_pre_registration(
+        self,
+        provider_id: str,
+        consumer_id: str,
+        data_id: Optional[str],
+        valid_hours: int,
+        payment_service_id: Optional[UUID] = None,
+        snapshot_price: Optional[Decimal] = None,
+        snapshot_tax_rate: Optional[Decimal] = None,
+        snapshot_tax_classification: Optional[str] = None,
+        include_rows_without_payment_user: bool = False,
+    ) -> Optional[Transaction]:
+        """データ交換に紐付いていない事前登録のうち最も古いものを 1 件、行ロックして返す
+
+        事前登録（取引可否確認 API が与信 OK 時に登録した行）は、取引可否確認の X-TrackingId を
+        tracking_id・eligibility_tracking_id として保存され、両当事者とも未報告（pending）のまま残る。
+        状態登録・金額確定の報告で 1 件ずつ引き当てて、tracking_id をデータ取得の X-TrackingId に
+        付け替える（eligibility_tracking_id はそのまま残す）。
+
+        対象: 当事者・データID（利用料モデルなしは data_id IS NULL と決済サービス・金額・税率・税区分）が
+        一致し、両当事者とも pending・未精算・未請求・NP 取引登録済みで、作成から valid_hours 時間以内のもの
+        （それより古いものは CronJob が NP 取引をキャンセルする対象のため引き当てない）。
+        他のリクエストや CronJob がロック中の行は待たずに飛ばす（SKIP LOCKED）。
+        include_rows_without_payment_user が True のときは、決済サービスのユーザー登録が無い行
+        （1.0.0 の取引可否確認（利用料モデルなし）で事前登録した行）も対象にする。
+        """
+        query = self.db.query(Transaction).filter(
+            Transaction.provider_id == provider_id,
+            Transaction.consumer_id == consumer_id,
+            Transaction.consumer_exchange_status == "pending",
+            Transaction.provider_exchange_status == "pending",
+            Transaction.settlement_status == "unsettled",
+            Transaction.request_date.is_(None),
+            Transaction.external_transaction_id.isnot(None),
+            Transaction.created_at >= func.now() - timedelta(hours=valid_hours),
+        )
+        if data_id is None:
+            query = query.filter(Transaction.data_id.is_(None))
+        else:
+            query = query.filter(Transaction.data_id == data_id)
+        if payment_service_id is not None:
+            query = query.outerjoin(
+                PaymentServiceUserRegistration,
+                Transaction.payment_service_user_id == PaymentServiceUserRegistration.payment_service_user_id,
+            )
+            service_match = PaymentServiceUserRegistration.payment_service_id == payment_service_id
+            if include_rows_without_payment_user:
+                service_match = or_(service_match, Transaction.payment_service_user_id.is_(None))
+            query = query.filter(service_match)
+        if snapshot_price is not None:
+            query = query.filter(Transaction.snapshot_price == snapshot_price)
+        if snapshot_tax_rate is not None:
+            query = query.filter(Transaction.snapshot_tax_rate == snapshot_tax_rate)
+        if snapshot_tax_classification is not None:
+            query = query.filter(Transaction.snapshot_tax_classification == snapshot_tax_classification)
+
+        transaction = (
+            query.order_by(Transaction.created_at, Transaction.transaction_id)
+            .limit(1)
+            .with_for_update(skip_locked=True, of=Transaction)
+            .first()
+        )
+        logger.debug(
+            "Unlinked pre-registration lookup",
+            provider_id=provider_id,
+            consumer_id=consumer_id,
+            data_id=data_id,
+            found=transaction is not None,
+        )
+        return transaction
+
+    def _set_lock_timeout(self) -> None:
+        """ロック待ちの上限を設ける（このトランザクションの間だけ有効）"""
+        self.db.execute(
+            text("SELECT set_config('lock_timeout', :timeout, true)"),
+            {"timeout": f"{settings.DB_LOCK_TIMEOUT}s"},
+        )
 
     @wrap_database_error
     def get_all_by_tracking_id_and_identifiers(

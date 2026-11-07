@@ -518,6 +518,7 @@ end
 
 * 取引ID `transaction_id`（必須・主キー・UUID）
 * トラッキングID `tracking_id`（必須・UUID・INDEX）
+* 取引可否確認のトラッキングID `eligibility_tracking_id`（任意・UUID・取引可否確認で事前登録した取引のみ）
 * 外部取引ID `external_transaction_id`（任意・VARCHAR・外部決済サービスのレスポンスから取得）
 * 利用料モデル履歴ID `fee_model_history_id`（任意・外部キー・UUID・利用料モデル無しの場合NULL）
 * 決済サービスユーザID `payment_service_user_id`（任意・外部キー・UUID・利用料モデル無しの場合NULL）
@@ -612,6 +613,7 @@ erDiagram
   TRANSACTIONS {
     UUID transaction_id PK "取引ID"
     UUID tracking_id "トラッキングID"
+    UUID eligibility_tracking_id "取引可否確認のトラッキングID"
     VARCHAR external_transaction_id "外部取引ID"
     UUID fee_model_history_id FK "利用料モデル履歴ID"
     UUID payment_service_user_id FK "決済サービスユーザID"
@@ -674,7 +676,7 @@ erDiagram
 | --- | ---------- | --------------------------------------------------------------------------------------------------------- |
 | 1.0 | 2026-02-28 | 初版 |
 | 1.1 | 2026-08-31 | AWS・Kubernetes 前提の記載を見直し。シーケンス図のログ参照先を修正。不要な記載の削除、誤記の訂正 |
-| 1.2 | 2026-09-30 | 利用料モデル取得 API（GET /fee-model/{fee_model_id}）を追加。API キーのヘッダ名表記を X-Payment-API-Key に統一。認可確認を L3 の認可判定 API（AuthZEN）経由に変更。取引テーブルに l2_http_status の timeout と completed_at を追加 |
+| 1.2 | 2026-09-30 | 利用料モデル取得 API（GET /fee-model/{fee_model_id}）を追加。API キーのヘッダ名表記を X-Payment-API-Key に統一。認可確認を L3 の認可判定 API（AuthZEN）経由に変更。取引テーブルに l2_http_status の timeout と completed_at・eligibility_tracking_id を追加 |
 
 ---
 

@@ -49,6 +49,10 @@ logger = get_logger(__name__)
 # NP の請求書発行基準日など、業務上の日付は JST で扱う
 JST = timezone(timedelta(hours=9))
 
+# 取引可否確認の事前登録をデータ交換に引き当てられる期間（時間）。これを過ぎて引き当てられて
+# いない事前登録は、L2 ログ突合 CronJob が NP 取引をキャンセルする（STALE_PRE_REGISTERED_SQL と同じ値）
+PRE_REGISTRATION_VALID_HOURS = 24
+
 
 def _later_completed_at(current: Optional[datetime], reported: Optional[datetime]) -> Optional[datetime]:
     """両当事者の完了日時のうち遅い方をデータ交換完了日時とする
@@ -102,11 +106,14 @@ class TransactionService:
         1. 利用料モデルの存在確認
         2. 外部決済サービスの与信確認（決済サービス名に応じてAPIを呼び出し）
            - consumer_id を buyer_id として使用
-        3. 与信OKの場合、tracking_id 付きで Transaction を事前登録する
+        3. 与信OKの場合、Transaction を事前登録する
 
-        tracking_id（X-TrackingId）はこのデータ交換を識別するIDとして事前登録行に保存し、
-        データ交換状態登録API は同じ tracking_id で事前登録行を特定する。
-        同じ tracking_id で再度呼ばれた場合（再送）は、同一内容なら再登録せず ALLOWED を返す。
+        事前登録行の tracking_id と eligibility_tracking_id には、この取引可否確認の X-TrackingId を
+        保存する。同じ X-TrackingId で再度呼ばれた場合（再送）は、同一内容で事前登録のままなら
+        再登録せず ALLOWED を返し、データ交換に引き当て済みなら 409 にする。
+        データ取得・データ交換状態登録はそれぞれ別の X-TrackingId で呼ばれるため、事前登録行は
+        状態登録の報告時に当事者・データIDで引き当て、tracking_id をデータ取得の X-TrackingId に
+        付け替える（register_data_exchange 参照）。eligibility_tracking_id は付け替えない。
         """
         logger.info(
             "Checking transaction eligibility",
@@ -158,8 +165,8 @@ class TransactionService:
 
         tracking_uuid = UUID(tracking_id)
 
-        # 同じ tracking_id で既に事前登録済みの場合（再送）は冪等に扱う
-        existing_records = self.transaction_repo.get_all_by_tracking_id(tracking_uuid)
+        # 同じ X-TrackingId で既に事前登録済みの場合（再送）は冪等に扱う
+        existing_records = self.transaction_repo.get_all_using_tracking_id(tracking_uuid)
         if existing_records:
             # 事前登録されるのは与信が必要な決済サービス（NP）の data_id だけのため、それと比較する
             pre_registered_data_ids = {
@@ -181,7 +188,6 @@ class TransactionService:
             return TransactionEligibilityResponse(
                 status=TransactionEligibility.ALLOWED,
                 detail="Eligible for transaction (already registered)",
-                tracking_id=tracking_id,
             )
 
         # 利用料モデルごとに異なる決済サービスが設定されている可能性があるため、
@@ -330,6 +336,7 @@ class TransactionService:
 
                             transaction = Transaction(
                                 tracking_id=tracking_uuid,
+                                eligibility_tracking_id=tracking_uuid,
                                 external_transaction_id=external_transaction_id,
                                 fee_model_history_id=history.fee_model_history_id,
                                 payment_service_user_id=payment_user_for_txn.payment_service_user_id,
@@ -400,7 +407,6 @@ class TransactionService:
         return TransactionEligibilityResponse(
             status=TransactionEligibility.ALLOWED,
             detail="Eligible for transaction",
-            tracking_id=tracking_id,
         )
 
     def _ensure_same_pre_registration(
@@ -411,10 +417,10 @@ class TransactionService:
         consumer_id: str,
         data_ids: set[Optional[str]],
     ) -> None:
-        """同じ tracking_id の既存レコードが、今回のリクエストと同一の事前登録か検証する
+        """同じ X-TrackingId の既存レコードが、今回のリクエストと同一の事前登録か検証する
 
         再送（同一内容・両ステータス pending・外部取引ID採番済み）なら何もしない。
-        それ以外（別内容、既に交換完了/失敗）は ResourceConflictError。
+        それ以外（別内容、データ交換に引き当て済み、キャンセル済み）は ResourceConflictError。
         """
         same_parties = all(
             r.provider_id == provider_id and r.consumer_id == consumer_id for r in records
@@ -452,10 +458,11 @@ class TransactionService:
 
         利用料モデルを使用せず、リクエストで直接指定された決済サービスIDで与信確認を行う。
         consumer_id を buyer_id として使用。
+        事前登録行の扱いは check_transaction_eligibility と同じ（取引金額確定APIの報告時に引き当てる）。
 
         Args:
             request: 取引可否確認リクエスト（利用料モデル無し）
-            tracking_id: トラッキングID（任意）
+            tracking_id: この取引可否確認の X-TrackingId（再送の判定用）
 
         Returns:
             TransactionEligibilityNonFeeModelResponse: 取引可否確認結果
@@ -485,9 +492,9 @@ class TransactionService:
 
         tracking_uuid = UUID(tracking_id)
 
-        # 同じ tracking_id で既に事前登録済みの場合（再送）は冪等に扱う。
+        # 同じ X-TrackingId で既に事前登録済みの場合（再送）は冪等に扱う。
         # 決済サービスを変えた再送も検出するため、取引登録の要否で分岐する前に確認する
-        existing_records = self.transaction_repo.get_all_by_tracking_id(tracking_uuid)
+        existing_records = self.transaction_repo.get_all_using_tracking_id(tracking_uuid)
         if existing_records:
             self._ensure_same_pre_registration(
                 existing_records,
@@ -506,7 +513,6 @@ class TransactionService:
             return TransactionEligibilityNonFeeModelResponse(
                 status=TransactionEligibility.ALLOWED,
                 detail="Eligible for transaction (already registered)",
-                tracking_id=tracking_id,
             )
 
         # 取引登録をサポートしているサービスのみチェック
@@ -613,6 +619,7 @@ class TransactionService:
 
                 transaction = Transaction(
                     tracking_id=tracking_uuid,
+                    eligibility_tracking_id=tracking_uuid,
                     external_transaction_id=registration_result.external_transaction_id,
                     fee_model_history_id=None,  # 利用料モデル無し
                     # 与信に使った決済サービスを確定時に照合できるよう保存する
@@ -680,7 +687,6 @@ class TransactionService:
         return TransactionEligibilityNonFeeModelResponse(
             status=TransactionEligibility.ALLOWED,
             detail="Eligible for transaction",
-            tracking_id=tracking_id,
         )
 
     def register_data_exchange(
@@ -689,6 +695,12 @@ class TransactionService:
         operator_id: Optional[str] = None,
     ) -> DataExchangeStatusResponse:
         """データ交換状態を登録
+
+        本文の tracking_id は、データ取得の呼び出しの X-TrackingId（データ提供者は L2 から転送された
+        データ取得のリクエストのヘッダ、データ利用者はデータ取得で使用した値）。取引可否確認・データ取得・
+        データ交換状態登録の X-TrackingId はそれぞれ別の値のため、取引可否確認で事前登録した取引は、
+        この tracking_id の最初の報告で当事者・データIDが一致するものを data_id ごとに 1 件引き当て、
+        tracking_id をこの値に付け替える（_link_pre_registrations）。
 
         外部決済サービスは呼び出さない（NP 取引登録は取引可否API で事前登録時に行う）。
 
@@ -711,154 +723,94 @@ class TransactionService:
 
         try:
             tracking_id = UUID(request.tracking_id)
-            # 提供者・利用者の同時報告や CronJob の確定処理と競合しないよう行ロックを取得する
+            # 提供者・利用者の同時報告で同じ事前登録を二重に引き当てないよう、tracking_id 単位で直列化する
+            self.transaction_repo.lock_tracking_id(tracking_id)
+            # CronJob の確定処理と競合しないよう行ロックを取得する
             existing_records = self.transaction_repo.get_all_by_tracking_id(tracking_id, for_update=True)
+            self._reject_eligibility_tracking_id(tracking_id)
 
-            # 既存レコードがある場合（取引可否APIによる事前登録、または2番目の登録者）
-            if existing_records:
-                # 利用料モデルなしのデータ交換（data_id なし）の tracking_id には状態登録しない
-                # （別のデータ交換の行が同じ tracking_id に混在し、L2 ログ突合や確定の判定が崩れる）
-                if any(r.data_id is None for r in existing_records):
-                    logger.warning(
-                        "tracking_id is used by a data exchange without fee model",
-                        tracking_id=str(tracking_id),
-                    )
-                    raise ResourceConflictError(
-                        message=f"tracking_id already used by a data exchange without fee model: {tracking_id}",
-                        resource="Transaction"
-                    )
-
-                # provider_id/consumer_idの整合性チェック（tracking_id 配下のすべての行）
-                mismatched = [
-                    r for r in existing_records
-                    if r.provider_id != request.provider_id or r.consumer_id != request.consumer_id
-                ]
-                if mismatched:
-                    existing = mismatched[0]
-                    logger.warning(
-                        "Provider/Consumer ID mismatch for existing tracking_id",
-                        tracking_id=str(tracking_id),
-                        existing_provider_id=existing.provider_id,
-                        existing_consumer_id=existing.consumer_id,
-                        request_provider_id=request.provider_id,
-                        request_consumer_id=request.consumer_id,
-                    )
-                    raise ResourceConflictError(
-                        message=f"Provider/Consumer ID mismatch for existing tracking_id: {tracking_id}",
-                        resource="Transaction"
-                    )
-
-                # operator_idに基づいて更新対象のステータスカラムを判定
-                new_status = "completed" if request.status == DataExchangeStatus.COMPLETED else "failed"
-
-                if operator_id == request.provider_id:
-                    target_column = "provider_exchange_status"
-                elif operator_id == request.consumer_id:
-                    target_column = "consumer_exchange_status"
-                else:
-                    logger.warning(
-                        "operator_id does not match provider_id or consumer_id",
-                        tracking_id=str(tracking_id),
-                        operator_id=operator_id,
-                    )
-                    raise BusinessRuleViolationError(
-                        message="operator_id does not match provider_id or consumer_id",
-                        rule="operator_id_match"
-                    )
-
-                # リクエストで指定された data_id のレコードのみ更新対象にする。
-                # tracking_id 配下の全レコードを更新すると、報告されていないデータまで
-                # completed になり請求対象になってしまう。
-                requested_data_ids = set(request.data_id_list)
-                stored_data_ids = {r.data_id for r in existing_records}
-                unknown_data_ids = [d for d in request.data_id_list if d not in stored_data_ids]
-                if unknown_data_ids:
-                    # 取引可否API は与信が必要な決済サービス（NP）の data_id だけ事前登録するため、
-                    # 同じ tracking_id に非NP の data_id が含まれる場合は、ここで取引を作成する。
-                    # NP の data_id で事前登録が無いもの・利用料モデルが無いものは RecordNotFoundError。
-                    logger.info(
-                        "Creating transactions for data_ids not pre-registered under tracking_id",
-                        tracking_id=str(tracking_id),
-                        data_ids=unknown_data_ids,
-                    )
-                    self._create_transactions_for_report(tracking_id, request, operator_id, unknown_data_ids)
-                target_records = [r for r in existing_records if r.data_id in requested_data_ids]
-
-                # 対象レコードのステータスを更新
-                for record in target_records:
-                    current_status = getattr(record, target_column)
-                    if current_status == "failed" and new_status == "completed":
-                        logger.warning(
-                            "Status mismatch: cannot change from failed to completed",
-                            tracking_id=str(tracking_id),
-                            column=target_column,
-                            existing_status=current_status,
-                            new_status=new_status,
-                            operator_id=operator_id
-                        )
-                        raise ResourceConflictError(
-                            message=f"Status mismatch: existing={current_status}, new={new_status}. Cannot change from failed to completed.",
-                            resource="Transaction"
-                        )
-                    # 確定済み・請求確定済み・キャンセル済みの取引は状態を変更しない（同じ状態の再送は成功）。
-                    # キャンセル済み（事前登録のまま24時間経過など）の取引は NP 側の取引が既に無い
-                    frozen = record.settlement_status != "unsettled" or record.request_date is not None
-                    if current_status != new_status and frozen:
-                        state = "billed" if record.settlement_status == "unsettled" else record.settlement_status
-                        logger.warning(
-                            "Transaction already settled, billed or cancelled",
-                            tracking_id=str(tracking_id),
-                            data_id=record.data_id,
-                            settlement_status=record.settlement_status,
-                            operator_id=operator_id
-                        )
-                        raise ResourceConflictError(
-                            message=f"Transaction is already {state}: tracking_id={tracking_id}, data_id={record.data_id}",
-                            resource="Transaction"
-                        )
-                    if current_status == "pending":
-                        setattr(record, target_column, new_status)
-                        if new_status == "completed":
-                            record.completed_at = _later_completed_at(record.completed_at, request.completed_at)
-                        self.transaction_repo.update(record)
-
-                self.db.commit()
-
-                logger.info(
-                    "Data exchange registration completed (existing record updated)",
+            # 利用料モデルなしのデータ交換（data_id なし）の tracking_id には状態登録しない
+            # （別のデータ交換の行が同じ tracking_id に混在し、L2 ログ突合や確定の判定が崩れる）
+            if any(r.data_id is None for r in existing_records):
+                logger.warning(
+                    "tracking_id is used by a data exchange without fee model",
                     tracking_id=str(tracking_id),
-                    operator_id=operator_id,
-                    updated_column=target_column,
-                    new_status=new_status,
-                    updated_count=len(target_records),
+                )
+                raise ResourceConflictError(
+                    message=f"tracking_id already used by a data exchange without fee model: {tracking_id}",
+                    resource="Transaction"
                 )
 
-                return DataExchangeStatusResponse(
-                    status=ProcessStatus.SUCCESS,
-                    detail=f"Data exchange completed for tracking_id: {tracking_id}"
+            # provider_id/consumer_idの整合性チェック（tracking_id 配下のすべての行）
+            mismatched = [
+                r for r in existing_records
+                if r.provider_id != request.provider_id or r.consumer_id != request.consumer_id
+            ]
+            if mismatched:
+                existing = mismatched[0]
+                logger.warning(
+                    "Provider/Consumer ID mismatch for existing tracking_id",
+                    tracking_id=str(tracking_id),
+                    existing_provider_id=existing.provider_id,
+                    existing_consumer_id=existing.consumer_id,
+                    request_provider_id=request.provider_id,
+                    request_consumer_id=request.consumer_id,
+                )
+                raise ResourceConflictError(
+                    message=f"Provider/Consumer ID mismatch for existing tracking_id: {tracking_id}",
+                    resource="Transaction"
                 )
 
-            # 取引可否APIで事前登録されたレコードは tracking_id 付きで保存されるため、
-            # 上の「既存レコードあり」分岐で処理される（tracking_id=NULL の曖昧検索は行わない）。
+            # 取引当事者以外による報告は、事前登録の引き当て・取引の作成の前に拒否する
+            target_column = self._reporter_status_column(request, operator_id, tracking_id)
+            new_status = "completed" if request.status == DataExchangeStatus.COMPLETED else "failed"
 
-            # 既存レコードがない場合: 最初の登録者として新規作成
-            transaction_count = self._create_transactions_for_report(
-                tracking_id, request, operator_id, list(request.data_id_list)
-            )
+            # リクエストで指定された data_id のレコードのみ更新対象にする。
+            # tracking_id 配下の全レコードを更新すると、報告されていないデータまで
+            # completed になり請求対象になってしまう。
+            requested_data_ids = set(request.data_id_list)
+            stored_data_ids = {r.data_id for r in existing_records}
+            unknown_data_ids = [d for d in request.data_id_list if d not in stored_data_ids]
+
+            # この tracking_id にまだ無い data_id は、取引可否確認の事前登録を引き当てる
+            linked_records = self._link_pre_registrations(tracking_id, request, unknown_data_ids)
+            records = existing_records + linked_records
+
+            # 事前登録が無い data_id は、報告者を起点に取引を作成する。
+            # 与信が必要な決済サービス（NP）の data_id・利用料モデルが無い data_id は RecordNotFoundError。
+            linked_data_ids = {r.data_id for r in linked_records}
+            new_data_ids = [d for d in unknown_data_ids if d not in linked_data_ids]
+            created_count = 0
+            if new_data_ids:
+                logger.info(
+                    "Creating transactions for data_ids without pre-registration",
+                    tracking_id=str(tracking_id),
+                    data_ids=new_data_ids,
+                )
+                created_count = self._create_transactions_for_report(
+                    tracking_id, request, operator_id, new_data_ids
+                )
+
+            target_records = [r for r in records if r.data_id in requested_data_ids]
+            self._apply_reported_status(target_records, target_column, new_status, request, operator_id, tracking_id)
 
             self.db.commit()
 
             logger.info(
-                "Data exchange registration completed successfully",
+                "Data exchange registration completed",
                 tracking_id=str(tracking_id),
-                transaction_count=transaction_count,
-                status=request.status.value
+                operator_id=operator_id,
+                updated_count=len(target_records),
+                linked_count=len(linked_records),
+                created_count=created_count,
+                status=request.status.value,
             )
 
-            return DataExchangeStatusResponse(
-                status=ProcessStatus.SUCCESS,
-                detail="Data exchange status registered"
-            )
+            if existing_records:
+                detail = f"Data exchange completed for tracking_id: {tracking_id}"
+            else:
+                detail = "Data exchange status registered"
+            return DataExchangeStatusResponse(status=ProcessStatus.SUCCESS, detail=detail)
 
         except RecordNotFoundError as e:
             self.db.rollback()
@@ -890,6 +842,137 @@ class TransactionService:
             )
             raise
 
+    @staticmethod
+    def _is_unlinked_pre_registration(record: Transaction) -> bool:
+        """取引可否確認で事前登録したまま、まだデータ交換に紐付いていない行か
+
+        状態登録・金額確定で引き当てた行は報告者の状態（completed / failed）が入るため、
+        両当事者とも pending の行は事前登録のままの行に限られる。
+        """
+        return record.consumer_exchange_status == "pending" and record.provider_exchange_status == "pending"
+
+    def _reject_eligibility_tracking_id(self, tracking_id: UUID) -> None:
+        """取引可否確認の X-TrackingId が状態登録・金額確定の tracking_id に指定された場合は 409
+
+        この値の L2 ログは取引可否確認の呼び出しのもので、データ取得の結果を確認できない（L2 ログ突合で
+        取引可否確認の応答をデータ交換の結果と取り違える）。データ取得の X-TrackingId を指定させる。
+        事前登録が別のデータ交換に引き当てられた後も、eligibility_tracking_id で判定する。
+        """
+        if self.transaction_repo.exists_by_eligibility_tracking_id(tracking_id):
+            logger.warning(
+                "tracking_id is the X-TrackingId of an eligibility check, not of a data fetch",
+                tracking_id=str(tracking_id),
+            )
+            raise ResourceConflictError(
+                message=(
+                    f"tracking_id is the X-TrackingId of an eligibility check: {tracking_id}. "
+                    "Specify the X-TrackingId of the data fetch request"
+                ),
+                resource="Transaction",
+            )
+
+    def _link_pre_registrations(
+        self,
+        tracking_id: UUID,
+        request: DataExchangeRequest,
+        data_ids: list[str],
+    ) -> list[Transaction]:
+        """取引可否確認の事前登録を data_id ごとに 1 件引き当て、tracking_id を付け替える
+
+        同じ当事者・データIDの事前登録が複数ある場合（取引可否確認を複数回呼んだ場合）は、
+        作成日時の古いものから 1 件ずつ使う。引き当てなかった事前登録は、24 時間経過後に
+        CronJob が NP 取引をキャンセルする。
+        """
+        linked = []
+        for data_id in data_ids:
+            record = self.transaction_repo.lock_unlinked_pre_registration(
+                provider_id=request.provider_id,
+                consumer_id=request.consumer_id,
+                data_id=data_id,
+                valid_hours=PRE_REGISTRATION_VALID_HOURS,
+            )
+            if record is None:
+                continue
+            logger.info(
+                "Linking pre-registered transaction to data exchange",
+                tracking_id=str(tracking_id),
+                eligibility_tracking_id=str(record.eligibility_tracking_id) if record.eligibility_tracking_id else None,
+                data_id=data_id,
+                external_transaction_id=record.external_transaction_id,
+            )
+            record.tracking_id = tracking_id
+            self.transaction_repo.update(record)
+            linked.append(record)
+        return linked
+
+    def _reporter_status_column(
+        self,
+        request: DataExchangeRequest,
+        operator_id: Optional[str],
+        tracking_id: UUID,
+    ) -> str:
+        """operator_id に基づいて更新対象のステータスカラムを判定する"""
+        if operator_id == request.provider_id:
+            return "provider_exchange_status"
+        if operator_id == request.consumer_id:
+            return "consumer_exchange_status"
+        logger.warning(
+            "operator_id does not match provider_id or consumer_id",
+            tracking_id=str(tracking_id),
+            operator_id=operator_id,
+        )
+        raise BusinessRuleViolationError(
+            message="operator_id does not match provider_id or consumer_id",
+            rule="operator_id_match"
+        )
+
+    def _apply_reported_status(
+        self,
+        records: list[Transaction],
+        target_column: str,
+        new_status: str,
+        request: DataExchangeRequest,
+        operator_id: Optional[str],
+        tracking_id: UUID,
+    ) -> None:
+        """既存・引き当てた取引に報告者のステータスを設定する"""
+        for record in records:
+            current_status = getattr(record, target_column)
+            if current_status == "failed" and new_status == "completed":
+                logger.warning(
+                    "Status mismatch: cannot change from failed to completed",
+                    tracking_id=str(tracking_id),
+                    column=target_column,
+                    existing_status=current_status,
+                    new_status=new_status,
+                    operator_id=operator_id
+                )
+                raise ResourceConflictError(
+                    message=f"Status mismatch: existing={current_status}, new={new_status}. Cannot change from failed to completed.",
+                    resource="Transaction"
+                )
+            # 確定済み・請求確定済み・キャンセル済みの取引は状態を変更しない（同じ状態の再送は成功）。
+            # キャンセル済み（事前登録のまま24時間経過など）の取引は NP 側の取引が既に無い
+            frozen = record.settlement_status != "unsettled" or record.request_date is not None
+            if current_status != new_status and frozen:
+                state = "billed" if record.settlement_status == "unsettled" else record.settlement_status
+                logger.warning(
+                    "Transaction already settled, billed or cancelled",
+                    tracking_id=str(tracking_id),
+                    data_id=record.data_id,
+                    settlement_status=record.settlement_status,
+                    operator_id=operator_id
+                )
+                raise ResourceConflictError(
+                    message=f"Transaction is already {state}: tracking_id={tracking_id}, data_id={record.data_id}",
+                    resource="Transaction"
+                )
+            if current_status == "pending":
+                setattr(record, target_column, new_status)
+                if new_status == "completed":
+                    record.completed_at = _later_completed_at(record.completed_at, request.completed_at)
+                self.transaction_repo.update(record)
+
     def _create_transactions_for_report(
         self,
         tracking_id: UUID,
@@ -897,7 +980,7 @@ class TransactionService:
         operator_id: Optional[str],
         data_ids: list[str],
     ) -> int:
-        """事前登録の無い data_id について、状態登録の報告者を起点に取引を作成する
+        """引き当てられる事前登録が無い data_id について、状態登録の報告者を起点に取引を作成する
 
         外部決済サービスへの取引登録（与信）が必要な決済サービスの data_id は、取引可否API による
         事前登録が必要なため作成しない（RecordNotFoundError）。
@@ -940,13 +1023,16 @@ class TransactionService:
             })
             if requiring_eligibility:
                 logger.warning(
-                    "No pre-registered transaction for tracking_id - eligibility check required",
+                    "No pre-registered transaction to link - eligibility check required",
                     tracking_id=str(tracking_id),
                     data_ids=requiring_eligibility,
                 )
                 raise RecordNotFoundError(
                     entity="pre-registered transaction (eligibility check required)",
-                    identifier=f"tracking_id={tracking_id}, data_id={', '.join(requiring_eligibility)}"
+                    identifier=(
+                        f"provider={request.provider_id}, consumer={request.consumer_id}, "
+                        f"data_id={', '.join(requiring_eligibility)}"
+                    ),
                 )
 
         for data_id in data_ids:
@@ -1039,7 +1125,9 @@ class TransactionService:
             # 確定済み判定と更新の間に CronJob が確定しないよう行ロックを取得する
             transactions = self.transaction_repo.get_all_by_tracking_id(tracking_id, for_update=True)
 
-            if not transactions:
+            # 事前登録のままの行（tracking_id が取引可否確認の X-TrackingId）は、データ交換状態が
+            # 登録されていないため更新対象にしない
+            if not transactions or any(self._is_unlinked_pre_registration(t) for t in transactions):
                 raise RecordNotFoundError(
                     entity="transaction",
                     identifier=tracking_id
@@ -1348,26 +1436,64 @@ class TransactionService:
                 resource="Transaction",
             )
 
+    def _link_non_fee_model_pre_registration(
+        self,
+        tracking_id: UUID,
+        request: DataExchangeNonFeeModelRequest,
+    ) -> list[Transaction]:
+        """取引可否確認（利用料モデルなし）の事前登録を 1 件引き当て、tracking_id を付け替える
+
+        当事者・決済サービス・金額・税率・税区分が与信時と一致する事前登録のうち、作成日時の
+        古いものを使う（与信時と異なる金額で確定しないよう、一致しないものは引き当てない）。
+        1.0.0 の事前登録は決済サービスのユーザー登録を持たないため、与信が必要な決済サービスの
+        確定では、決済サービスを照合できない事前登録も対象にする。
+        """
+        record = self.transaction_repo.lock_unlinked_pre_registration(
+            provider_id=request.provider_id,
+            consumer_id=request.consumer_id,
+            data_id=None,
+            valid_hours=PRE_REGISTRATION_VALID_HOURS,
+            payment_service_id=request.payment_service_id,
+            snapshot_price=to_decimal(request.amount),
+            snapshot_tax_rate=to_decimal(request.tax_rate),
+            snapshot_tax_classification=request.tax_classification.value,
+            include_rows_without_payment_user=(
+                settings.EXTERNAL_PAYMENT_ENABLED
+                and self.payment_client.supports_transaction_registration(str(request.payment_service_id))
+            ),
+        )
+        if record is None:
+            return []
+        logger.info(
+            "Linking pre-registered transaction to data exchange (non fee model)",
+            tracking_id=str(tracking_id),
+            eligibility_tracking_id=str(record.eligibility_tracking_id) if record.eligibility_tracking_id else None,
+            external_transaction_id=record.external_transaction_id,
+        )
+        record.tracking_id = tracking_id
+        self.transaction_repo.update(record)
+        return [record]
+
     def confirm_data_exchange_non_fee_model(
         self,
         request: DataExchangeNonFeeModelRequest,
-        tracking_id_header: Optional[str] = None,
     ) -> DataExchangeStatusNonFeeModelResponse:
         """データ交換取引金額確定（利用料モデル無し）
 
         利用料モデルを使用せず、リクエストで直接指定された金額で
         トランザクションを作成し、外部決済サービスに取引登録を実行する。
 
+        本文の tracking_id は、データ取得の呼び出しの X-TrackingId（L2 ログ突合で照合する値）。
+        取引可否確認（利用料モデルなし）で事前登録した取引は、この tracking_id の最初の確定で
+        当事者・決済サービス・金額・税率・税区分が一致するものを 1 件引き当て、tracking_id をこの値に付け替える。
+
         Args:
             request: データ交換リクエスト（利用料モデル無し）
-            tracking_id_header: HTTPヘッダーのトラッキングID（外部API呼び出し用）
 
         Returns:
             DataExchangeStatusNonFeeModelResponse: 登録結果
         """
-        # tracking_id はリクエスト本文（設計上の想定）または X-TrackingId ヘッダから取得する。
-        # 取引可否確認API（利用料モデルなし）が事前登録した行と同じ tracking_id を指定すること。
-        tracking_id = UUID(request.tracking_id or tracking_id_header)
+        tracking_id = UUID(request.tracking_id)
 
         logger.info(
             "Starting data exchange confirmation (non fee model)",
@@ -1380,9 +1506,11 @@ class TransactionService:
 
         billed_external_ids: list[str] = []
         try:
-            # 取引可否確認API（利用料モデルなし）で事前登録されたレコードを tracking_id で検索
-            # 再送が同時に届いても二重に請求確定依頼しないよう行ロックを取得する
+            # 再送が同時に届いても同じ事前登録を二重に引き当てたり、二重に請求確定依頼したりしないよう、
+            # tracking_id 単位で直列化し、行ロックを取得する
+            self.transaction_repo.lock_tracking_id(tracking_id)
             pre_registered = self.transaction_repo.get_all_by_tracking_id(tracking_id, for_update=True)
+            self._reject_eligibility_tracking_id(tracking_id)
 
             # 利用料モデルありのデータ交換（data_id あり）の tracking_id は確定しない
             # （別のデータ交換の行が同じ tracking_id に混在し、L2 ログ突合や状態登録の判定が崩れる）
@@ -1395,6 +1523,9 @@ class TransactionService:
                     message=f"tracking_id already used by a data exchange with fee model: {tracking_id}",
                     resource="Transaction",
                 )
+
+            if not pre_registered:
+                pre_registered = self._link_non_fee_model_pre_registration(tracking_id, request)
 
             if pre_registered:
                 for record in pre_registered:
@@ -1486,13 +1617,16 @@ class TransactionService:
                     and self.payment_client.supports_transaction_registration(payment_service_id)
                 ):
                     logger.warning(
-                        "No pre-registered transaction for tracking_id - eligibility check required",
+                        "No pre-registered transaction to link - eligibility check required",
                         tracking_id=str(tracking_id),
                         payment_service_id=payment_service_id,
                     )
                     raise RecordNotFoundError(
                         entity="pre-registered transaction (eligibility check required)",
-                        identifier=str(tracking_id),
+                        identifier=(
+                            f"provider={request.provider_id}, consumer={request.consumer_id}, "
+                            f"payment_service={payment_service_id}, amount={request.amount}"
+                        ),
                     )
 
                 # 外部決済サービス連携が不要な場合のみ新規作成

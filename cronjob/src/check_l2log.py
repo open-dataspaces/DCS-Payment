@@ -54,6 +54,7 @@ L2_STATUS_TIMEOUT = "timeout"
 # L2 ログの statusCode が 2xx のものをデータ交換成功とみなす（200 に限定しない）。
 # アプリ側（Transaction.l2_succeeded()）と同じ判定にすること。
 L2_SUCCESS_SQL = "l2_http_status ~ '^2[0-9]{2}$'"
+L2_SUCCESS_RE = re.compile(r"^2[0-9]{2}$")
 
 # 多重起動防止用の advisory lock キー（本 CronJob 固有の固定値）
 CRON_ADVISORY_LOCK_KEY = 7_320_001
@@ -355,12 +356,40 @@ def collect_logs_from_s3(s3, target_dates):
     logger.info("S3 ログ取得完了: 合計 %d ファイル / %d 行", total_files, total_lines)
 
 
+_GATEWAY_LOG_MARKER = '{"logType"'
+_json_decoder = json.JSONDecoder()
+
+
+def _extract_gateway_log(text_payload):
+    """textPayload に埋め込まれたゲートウェイログの JSON を取り出す
+
+    ログプレフィックス（日時 [スレッド] INFO クラス名 - [MDC:] ）の後に JSON がある。
+    ゲートウェイログは入れ子のオブジェクト（gatewayRequest の odsHeaders など）を含むことがあるため、
+    正規表現ではなく JSON デコーダで先頭から 1 オブジェクト分を読む。
+    埋め込み JSON が無い行は None、壊れている行は JSONDecodeError。
+    """
+    start = text_payload.find(_GATEWAY_LOG_MARKER)
+    if start < 0:
+        return None
+    inner, _ = _json_decoder.raw_decode(text_payload, start)
+    return inner if isinstance(inner, dict) else None
+
+
 def parse_gateway_responses(log_lines, tracking_ids=None):
-    """ログ行から gatewayResponse の trackingId → statusCode マッピングを構築
+    """ログ行からデータ交換（データ取得）の trackingId → statusCode マッピングを構築
 
     ログ形式:
       各行は JSON オブジェクト。textPayload 内に埋め込み JSON があり、
       logType="gatewayResponse" のエントリから trackingId と statusCode を抽出する。
+
+    照合対象:
+      取引の tracking_id はデータ取得の呼び出しの X-TrackingId。取引可否確認・データ交換状態登録など
+      ほかの呼び出しは別の X-TrackingId で行われるため、trackingId が一致する応答ログは
+      データ取得の呼び出しのものとして扱う（要求ログとの対応付けは行わない）。
+      同じ trackingId の応答ログが複数ある場合（データ取得の再試行など）は、2xx の応答が
+      1 件でもあればその statusCode（成功）を、無ければ最後に記録された statusCode を採用する。
+      読み込んだ応答ログの中で、成否の判定がログの記録順（L2 のインスタンスやファイルの順序）に
+      依存しないようにするため。
 
     Args:
         tracking_ids: 指定した場合、これらの trackingId のエントリだけを残す
@@ -370,9 +399,6 @@ def parse_gateway_responses(log_lines, tracking_ids=None):
         dict: {trackingId（小文字）: statusCode} のマッピング
     """
     wanted = None if tracking_ids is None else {str(t).lower() for t in tracking_ids}
-    # textPayload 内の埋め込み JSON を抽出する正規表現
-    # ログプレフィックス（日時 [スレッド] INFO クラス名 - [MDC:] ）の後に JSON がある
-    json_pattern = re.compile(r'\{[^{]*"logType"[^}]*\}')
 
     tracking_status_map = {}
     parse_errors = 0
@@ -386,34 +412,35 @@ def parse_gateway_responses(log_lines, tracking_ids=None):
                 parse_errors += 1
                 continue
             text_payload = outer.get("textPayload", "")
-
+            if not isinstance(text_payload, str):
+                # textPayload が文字列でない行（null・数値）は不正行として読み飛ばす
+                parse_errors += 1
+                continue
             if '"gatewayResponse"' not in text_payload:
                 continue
 
-            # textPayload 内の埋め込み JSON を抽出
-            match = json_pattern.search(text_payload)
-            if not match:
-                continue
-
-            inner = json.loads(match.group())
-
-            if inner.get("logType") != "gatewayResponse":
+            inner = _extract_gateway_log(text_payload)
+            if inner is None or inner.get("logType") != "gatewayResponse":
                 continue
 
             tracking_id = inner.get("trackingId")
             status_code = inner.get("statusCode")
+            if not tracking_id or not status_code:
+                continue
+            # UUID の大文字小文字の違いで照合漏れにならないよう小文字にそろえる
+            # （DB の tracking_id は小文字の正規形）
+            tracking_id = str(tracking_id).lower()
+            if wanted is not None and tracking_id not in wanted:
+                continue
 
-            if tracking_id and status_code:
-                # UUID の大文字小文字の違いで照合漏れにならないよう小文字にそろえる
-                # （DB の tracking_id は小文字の正規形）
-                tracking_id = str(tracking_id).lower()
-                if wanted is not None and tracking_id not in wanted:
-                    continue
-                tracking_status_map[tracking_id] = str(status_code)
-                logger.debug(
-                    "gatewayResponse 検出: trackingId=%s, statusCode=%s",
-                    tracking_id, status_code
-                )
+            status_code = str(status_code)
+            current = tracking_status_map.get(tracking_id)
+            if current is None or not L2_SUCCESS_RE.match(current):
+                tracking_status_map[tracking_id] = status_code
+            logger.debug(
+                "gatewayResponse 検出: trackingId=%s, statusCode=%s",
+                tracking_id, status_code
+            )
 
         except (json.JSONDecodeError, TypeError):
             parse_errors += 1

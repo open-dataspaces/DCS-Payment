@@ -571,9 +571,19 @@ class Transaction(Base):
     )
     tracking_id = Column(
         PG_UUID(as_uuid=True),
-        nullable=True,  # 取引可否API時はNULL、データ交換状態登録APIで更新
+        # 事前登録時は取引可否確認の X-TrackingId。状態登録・金額確定でデータ取得の X-TrackingId に
+        # 付け替える（1.0.0 で事前登録した行は NULL）
+        nullable=True,
         index=True,
         comment="トラッキングID"
+    )
+    eligibility_tracking_id = Column(
+        PG_UUID(as_uuid=True),
+        # 事前登録した取引可否確認の X-TrackingId。tracking_id を付け替えた後も残し、同じ値での
+        # 取引可否確認の再送や、状態登録・金額確定への誤った指定を判定する
+        # （状態登録で作成した行と、1.0.0 で事前登録した行は NULL）
+        nullable=True,
+        comment="取引可否確認のトラッキングID"
     )
     external_transaction_id = Column(
         String(20),
@@ -751,6 +761,14 @@ class Transaction(Base):
             text("COALESCE(data_id, '')"),
             unique=True,
             postgresql_where=text("tracking_id IS NOT NULL"),
+        ),
+        # 1 回の取引可否確認で事前登録する data_id は一意（引き当て後も同じ X-TrackingId で二重に事前登録しない）
+        Index(
+            "uq_transaction_eligibility_tracking_data",
+            "eligibility_tracking_id",
+            text("COALESCE(data_id, '')"),
+            unique=True,
+            postgresql_where=text("eligibility_tracking_id IS NOT NULL"),
         ),
         # 支払/請求の期間判定・L2ログ突合の対象判定は COALESCE(completed_at, created_at) で
         # 絞り込むため、同じ式のインデックスにする（completed_at 単独のインデックスは使われない）

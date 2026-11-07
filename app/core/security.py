@@ -112,9 +112,7 @@ async def verify_request_headers(
     # X-TrackingId を厳密にバリデーション
     validated_tracking_id = validate_tracking_id(x_tracking_id)
 
-    """
-    X-Payment-API-KeyヘッダーのAPIキーの検証をする
-    """
+    # X-Payment-API-Key ヘッダの API キーを検証する
     if not settings.X_PAYMENT_API_KEY:
         # サーバ側の API キーが未設定の場合は、空のキーで通過させない（fail-closed）
         logger.error(
