@@ -14,20 +14,26 @@ class AuthzClientError(Exception):
 
 
 class AuthzClient(BaseClient):
-    """認可サービスクライアント"""
+    """
+    認可サービスクライアント
+
+    L3 の認可判定API（AuthZEN Access Evaluation API）を呼び出す。
+    L3 は認可ストア（OpenFGA）に判定を転送し、判定結果をレスポンスの data に格納して返す。
+    """
 
     def __init__(self):
         super().__init__(
-            base_url=settings.AUTHZ_BASE_URL,
+            base_url=settings.L3_BASE_URL,
             timeout=5.0
         )
-        self.store_id = settings.AUTHZ_OPENFGA_STORE_ID
-        self.authorization_model_id = settings.AUTHZ_OPENFGA_MODEL_ID
+        self.api_key = settings.L3_API_KEY
+        self.evaluation_endpoint = settings.L3_AUTHZ_EVALUATION_ENDPOINT.format(store_id=settings.AUTHZ_STORE_ID)
 
     async def check(
         self,
         operator_id: str,
         endpoint_name: str,
+        access_token: str,
         relation: str = "can_access",
         tracking_id: Optional[str] = None
     ) -> bool:
@@ -37,8 +43,9 @@ class AuthzClient(BaseClient):
         Args:
             operator_id: オペレーターID
             endpoint_name: エンドポイント名（例: "fee-model:create"）
+            access_token: APIの呼び出し元のアクセストークン（L3 の認可判定APIの認証に使用）
             relation: 関係（デフォルト: "can_access"）
-            tracking_id: トラッキングID（ログ用）
+            tracking_id: トラッキングID
 
         Returns:
             bool: 認可された場合True
@@ -70,24 +77,26 @@ class AuthzClient(BaseClient):
 
         # OpenFGAのobject形式は type:id で、idに : は使えないため - に変換
         safe_endpoint_name = endpoint_name.replace(":", "-")
+        # AuthZEN の subject / resource / action は、OpenFGA の user / object / relation に対応する
+        # （user:{operator_id} が api_endpoint:{エンドポイント名} に対して relation を持つかを判定）
         payload = {
-            "authorization_model_id": self.authorization_model_id,
-            "tuple_key": {
-                "user": f"user:{operator_id}",
-                "relation": relation,
-                "object": f"api_endpoint:{safe_endpoint_name}"
-            }
+            "subject": {"type": "user", "id": operator_id},
+            "resource": {"type": "api_endpoint", "id": safe_endpoint_name},
+            "action": {"name": relation}
         }
 
         headers = {
             "Content-Type": "application/json",
+            "Accept-Language": "ja-JP",
+            "API-Key": self.api_key,
+            "Authorization": f"Bearer {access_token}",
         }
         if tracking_id:
-            headers["X-TrackingId"] = tracking_id
+            headers["X-TrackingID"] = tracking_id
 
         try:
             response = await self.post(
-                endpoint=f"/stores/{self.store_id}/check",
+                endpoint=self.evaluation_endpoint,
                 headers=headers,
                 json=payload
             )
@@ -104,8 +113,14 @@ class AuthzClient(BaseClient):
                     f"Authorization check failed: {response.status_code}"
                 )
 
-            result = response.json()
-            allowed = result.get("allowed", False)
+            # L3 のレスポンスは data に認可ストアの判定結果（{"decision": true/false}）を格納している
+            allowed = (response.json().get("data") or {}).get("decision")
+            if not isinstance(allowed, bool):
+                logger.error(
+                    "Authorization check failed: invalid response",
+                    extra={"response": response.text}
+                )
+                raise AuthzClientError("Authorization check failed: invalid response")
 
             logger.info(
                 "Authorization check completed",
@@ -132,6 +147,7 @@ class AuthzClient(BaseClient):
         self,
         operator_id: str,
         endpoint_name: str,
+        access_token: str,
         relation: str = "can_access",
         tracking_id: Optional[str] = None
     ) -> None:
@@ -141,7 +157,7 @@ class AuthzClient(BaseClient):
         Raises:
             AuthzClientError: 認可拒否またはAPI呼び出し失敗時
         """
-        if not await self.check(operator_id, endpoint_name, relation, tracking_id):
+        if not await self.check(operator_id, endpoint_name, access_token, relation, tracking_id):
             raise AuthzClientError(
                 f"Access denied: {operator_id} cannot {relation} {endpoint_name}"
             )

@@ -52,7 +52,8 @@ class PaymentBillingService:
         )
 
         # 指定期間のトランザクションを取得（consumer_idとprovider_idで絞り込み）
-        # 3条件: consumer=completed AND provider=completed AND l2_http_status='200'
+        # 条件: consumer=completed AND provider=completed AND settlement_status != cancelled
+        #       AND（L2_HTTP_STATUS_FILTER_ENABLED の場合）l2_http_status が 2xx
         transactions = self.transaction_repo.list_by_consumer_and_provider(
             consumer_id=consumer_id,
             provider_id=request.provider_id,
@@ -60,7 +61,9 @@ class PaymentBillingService:
             end_date=request.end_date,
             consumer_exchange_status="completed",
             provider_exchange_status="completed",
-            l2_http_status="200" if settings.L2_HTTP_STATUS_FILTER_ENABLED else None
+            l2_succeeded_only=settings.L2_HTTP_STATUS_FILTER_ENABLED,
+            # キャンセル済み（NP取引キャンセル済み）の取引は設定にかかわらず集計に含めない
+            exclude_settlement_statuses=["cancelled"],
         )
 
         logger.debug(
@@ -93,9 +96,10 @@ class PaymentBillingService:
                 provider_id=first_trans.provider_id,
                 consumer_id=first_trans.consumer_id,
                 data_id_list=data_id_list,
-                completed_at=first_trans.created_at,
+                completed_at=max(t.completed_at_or_created_at for t in trans_list),
                 amount=float(amount),
-                tax_rate=float(first_trans.snapshot_tax_rate)
+                tax_rate=float(first_trans.snapshot_tax_rate),
+                settlement_status=self._group_settlement_status(trans_list),
             )
 
             payment_items.append(payment_item)
@@ -129,7 +133,8 @@ class PaymentBillingService:
         )
 
         # 指定期間のトランザクションを取得（provider_idとconsumer_idで絞り込み）
-        # 3条件: consumer=completed AND provider=completed AND l2_http_status='200'
+        # 条件: consumer=completed AND provider=completed AND settlement_status != cancelled
+        #       AND（L2_HTTP_STATUS_FILTER_ENABLED の場合）l2_http_status が 2xx
         transactions = self.transaction_repo.list_by_consumer_and_provider(
             consumer_id=request.consumer_id,
             provider_id=provider_id,
@@ -137,7 +142,9 @@ class PaymentBillingService:
             end_date=request.end_date,
             consumer_exchange_status="completed",
             provider_exchange_status="completed",
-            l2_http_status="200" if settings.L2_HTTP_STATUS_FILTER_ENABLED else None
+            l2_succeeded_only=settings.L2_HTTP_STATUS_FILTER_ENABLED,
+            # キャンセル済み（NP取引キャンセル済み）の取引は設定にかかわらず集計に含めない
+            exclude_settlement_statuses=["cancelled"],
         )
 
         logger.debug(
@@ -170,9 +177,10 @@ class PaymentBillingService:
                 provider_id=first_trans.provider_id,
                 consumer_id=first_trans.consumer_id,
                 data_id_list=data_id_list,
-                completed_at=first_trans.created_at,
+                completed_at=max(t.completed_at_or_created_at for t in trans_list),
                 amount=float(amount),
-                tax_rate=float(first_trans.snapshot_tax_rate)
+                tax_rate=float(first_trans.snapshot_tax_rate),
+                settlement_status=self._group_settlement_status(trans_list),
             )
 
             billing_items.append(billing_item)
@@ -240,6 +248,7 @@ class PaymentBillingService:
                 request_date=t.request_date,
                 payment_deadline=t.payment_deadline,
                 paid_at=t.paid_at,
+                completed_at=t.completed_at,
                 created_at=t.created_at,
                 updated_at=t.updated_at,
             )
@@ -257,6 +266,11 @@ class PaymentBillingService:
             transactions=items,
             total_count=len(items),
         )
+
+    @staticmethod
+    def _group_settlement_status(trans_list: List[Transaction]) -> str:
+        """トラッキングID単位の精算状態（全行 settled なら settled、それ以外は unsettled）"""
+        return "settled" if all(t.settlement_status == "settled" for t in trans_list) else "unsettled"
 
     def _group_transactions_by_tracking_id(
         self,

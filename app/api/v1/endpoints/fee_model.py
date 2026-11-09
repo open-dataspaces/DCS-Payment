@@ -1,7 +1,7 @@
 import hashlib
-from email.utils import formatdate
-from time import mktime
-from uuid import UUID, uuid4
+from datetime import timezone
+from email.utils import format_datetime
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy.orm import Session
@@ -11,6 +11,7 @@ from app.core.custom_exceptions import (
     DuplicateRecordError,
     OptimisticLockError,
     ResourceConflictError,
+    BusinessRuleViolationError,
     DatabaseError,
 )
 from app.core.logging import get_logger, set_request_id
@@ -46,11 +47,12 @@ router = APIRouter()
         status.HTTP_400_BAD_REQUEST: {"description": "パラメータエラー", "model": ErrorResponse},
         status.HTTP_401_UNAUTHORIZED: {"description": "認証エラー", "model": ErrorResponse},
         status.HTTP_403_FORBIDDEN: {"description": "認可エラー", "model": ErrorResponse},
+        status.HTTP_404_NOT_FOUND: {"description": "決済サービスが未登録", "model": ErrorResponse},
         status.HTTP_409_CONFLICT: {"description": "リソース競合エラー", "model": ErrorResponse},
         status.HTTP_500_INTERNAL_SERVER_ERROR: {"description": "サーバエラー", "model": ErrorResponse},
     }
 )
-async def create_fee_model(
+def create_fee_model(
     request: FeeModelCreateRequest,
     headers: dict = Depends(verify_request_headers),
     credential: dict = Depends(verify_access_token),
@@ -58,7 +60,7 @@ async def create_fee_model(
     db: Session = Depends(get_db),
 ) -> FeeModelResponse:
     """利用料モデルを作成"""
-    request_id = headers.get('x-trackingId') or str(uuid4())
+    request_id = headers["x_tracking_id"]
     set_request_id(request_id)
 
     logger.info(
@@ -141,7 +143,7 @@ async def create_fee_model(
         status.HTTP_500_INTERNAL_SERVER_ERROR: {"description": "サーバエラー", "model": ErrorResponse},
     }
 )
-async def list_fee_models(
+def list_fee_models(
     response: Response,
     headers: dict = Depends(verify_request_headers),
     credential: dict = Depends(verify_access_token),
@@ -149,7 +151,7 @@ async def list_fee_models(
     db: Session = Depends(get_db),
 ) -> FeeModelListResponse:
     """利用料モデル一覧を取得"""
-    request_id = headers.get('x-trackingId') or str(uuid4())
+    request_id = headers["x_tracking_id"]
     set_request_id(request_id)
 
     skip = 0
@@ -188,12 +190,10 @@ async def list_fee_models(
 
         # ETag/Last-Modified ヘッダを設定
         if result.models:
-            # Last-Modified: 最新のupdated_atを使用
+            # Last-Modified: 最新のupdated_atを使用（サーバのタイムゾーンによらず GMT で表す）
             latest_updated = max(m.updated_at for m in result.models)
-            response.headers["Last-Modified"] = formatdate(
-                timeval=mktime(latest_updated.timetuple()),
-                localtime=False,
-                usegmt=True
+            response.headers["Last-Modified"] = format_datetime(
+                latest_updated.astimezone(timezone.utc), usegmt=True
             )
             # ETag: fee_model_idリストとupdated_atのハッシュ
             etag_source = "|".join(
@@ -229,6 +229,110 @@ async def list_fee_models(
         )
 
 
+@router.get(
+    "/fee-model/{fee_model_id}",
+    response_model=FeeModelResponse,
+    summary="利用料モデル取得API",
+    description="指定した利用料モデルを取得します。",
+    responses={
+        status.HTTP_200_OK: {"description": "成功"},
+        status.HTTP_400_BAD_REQUEST: {"description": "パラメータエラー", "model": ErrorResponse},
+        status.HTTP_401_UNAUTHORIZED: {"description": "認証エラー", "model": ErrorResponse},
+        status.HTTP_403_FORBIDDEN: {"description": "認可エラー", "model": ErrorResponse},
+        status.HTTP_404_NOT_FOUND: {"description": "該当データなし", "model": ErrorResponse},
+        status.HTTP_500_INTERNAL_SERVER_ERROR: {"description": "サーバエラー", "model": ErrorResponse},
+    }
+)
+def get_fee_model(
+    fee_model_id: str,
+    response: Response,
+    headers: dict = Depends(verify_request_headers),
+    credential: dict = Depends(verify_access_token),
+    _: None = Depends(require_permission("fee-model:get")),
+    db: Session = Depends(get_db),
+) -> FeeModelResponse:
+    """利用料モデルを1件取得"""
+    request_id = headers["x_tracking_id"]
+    set_request_id(request_id)
+
+    logger.info(
+        "Received get fee model request",
+        endpoint=f"/api/v1/fee-model/{fee_model_id}",
+        method="GET",
+        fee_model_id=fee_model_id
+    )
+
+    # UUID変換を最初に実行（早期リターンパターン）
+    try:
+        uuid_id = UUID(fee_model_id)
+    except ValueError:
+        logger.warning(
+            "Invalid UUID format provided",
+            fee_model_id=fee_model_id,
+            status_code=400
+        )
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid UUID format: {fee_model_id}"
+        )
+
+    try:
+        service = FeeModelService(db)
+        result = service.get_fee_model(uuid_id)
+
+        logger.info(
+            "Fee model retrieved successfully",
+            fee_model_id=str(uuid_id),
+            status_code=200
+        )
+
+        # ETag/Last-Modified ヘッダを設定（一覧取得と同じ fee_model_id:updated_at を元にする）
+        response.headers["Last-Modified"] = format_datetime(
+            result.updated_at.astimezone(timezone.utc), usegmt=True
+        )
+        etag_source = f"{result.fee_model_id}:{result.updated_at.isoformat()}"
+        response.headers["ETag"] = f'"{hashlib.md5(etag_source.encode()).hexdigest()}"'
+
+        return result
+
+    except RecordNotFoundError as e:
+        logger.warning(
+            "Request failed - resource not found",
+            fee_model_id=str(uuid_id),
+            error=str(e),
+            status_code=404
+        )
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(e)
+        )
+    except DatabaseError as e:
+        logger.error(
+            "Request failed - database error",
+            fee_model_id=str(uuid_id),
+            error=str(e),
+            status_code=500,
+            exc_info=True
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Database error occurred"
+        )
+    except Exception as e:
+        logger.error(
+            "Request failed - unexpected error",
+            fee_model_id=str(uuid_id),
+            error_type=type(e).__name__,
+            error=str(e),
+            status_code=500,
+            exc_info=True
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="unexpected error"
+        )
+
+
 @router.put(
     "/fee-model/{fee_model_id}",
     response_model=FeeModelResponse,
@@ -244,7 +348,7 @@ async def list_fee_models(
         status.HTTP_500_INTERNAL_SERVER_ERROR: {"description": "サーバエラー", "model": ErrorResponse},
     }
 )
-async def update_fee_model(
+def update_fee_model(
     fee_model_id: str,
     request: FeeModelUpdateRequest,
     headers: dict = Depends(verify_request_headers),
@@ -253,7 +357,7 @@ async def update_fee_model(
     db: Session = Depends(get_db),
 ) -> FeeModelResponse:
     """利用料モデルを更新"""
-    request_id = headers.get('x-trackingId') or str(uuid4())
+    request_id = headers["x_tracking_id"]
     set_request_id(request_id)
 
     logger.info(
@@ -301,7 +405,9 @@ async def update_fee_model(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=str(e)
         )
-    except (OptimisticLockError, ResourceConflictError) as e:
+    except (OptimisticLockError, ResourceConflictError, DuplicateRecordError) as e:
+        # DuplicateRecordError: 同時に同じ識別子のモデルを有効化し、一意インデックス
+        # （uq_fee_model_active）に違反した場合
         logger.warning(
             "Request failed - resource conflict",
             fee_model_id=str(uuid_id),
@@ -310,6 +416,17 @@ async def update_fee_model(
         )
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
+            detail=str(e)
+        )
+    except BusinessRuleViolationError as e:
+        logger.warning(
+            "Request failed - business rule violation",
+            fee_model_id=str(uuid_id),
+            error=str(e),
+            status_code=400
+        )
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(e)
         )
     except DatabaseError as e:
@@ -354,7 +471,7 @@ async def update_fee_model(
         status.HTTP_500_INTERNAL_SERVER_ERROR: {"description": "サーバエラー", "model": ErrorResponse},
     }
 )
-async def delete_fee_model(
+def delete_fee_model(
     fee_model_id: str,
     headers: dict = Depends(verify_request_headers),
     credential: dict = Depends(verify_access_token),
@@ -362,7 +479,7 @@ async def delete_fee_model(
     db: Session = Depends(get_db),
 ):
     """利用料モデルを削除"""
-    request_id = headers.get('x-trackingId') or str(uuid4())
+    request_id = headers["x_tracking_id"]
     set_request_id(request_id)
 
     logger.info(
@@ -408,6 +525,18 @@ async def delete_fee_model(
         )
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(e)
+        )
+    except (OptimisticLockError, ResourceConflictError) as e:
+        # 取引から参照されている、または削除中に他のリクエストが更新した
+        logger.warning(
+            "Request failed - resource conflict",
+            fee_model_id=str(uuid_id),
+            error=str(e),
+            status_code=409
+        )
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
             detail=str(e)
         )
     except DatabaseError as e:

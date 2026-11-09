@@ -49,8 +49,10 @@ opt 利用料モデル作成
   CORE_L2->>PAYMENT: POST /api/v1/fee-model<BR>(アクセストークン,利用料モデル名,利用料モデル情報)
   PAYMENT->>CORE_L3: アクセストークン検証
   CORE_L3-->>PAYMENT: OK
-  PAYMENT->>AUTHZ: 認可確認
-  AUTHZ-->>PAYMENT: 認可確認結果
+  PAYMENT->>CORE_L3: 認可判定 (AuthZEN Evaluation API: operator_id, 対象APIエンドポイント)
+  CORE_L3->>AUTHZ: 認可判定
+  AUTHZ-->>CORE_L3: 判定結果
+  CORE_L3-->>PAYMENT: 認可結果 (decision)
   PAYMENT->>PAYMENT_DB1: 利用料モデル登録(INSERT)
   PAYMENT_DB1-->>PAYMENT: 作成結果
   PAYMENT-->>CORE_L2: 201 Created<BR>(利用料モデルID,利用料モデル名,利用料モデル情報)
@@ -64,8 +66,10 @@ opt 利用料モデル更新
   CORE_L2->>PAYMENT: PUT /api/v1/fee-model/{利用料モデルID}<BR>(アクセストークン,利用料モデル名,利用料モデル情報)
   PAYMENT->>CORE_L3: アクセストークン検証
   CORE_L3-->>PAYMENT: OK
-  PAYMENT->>AUTHZ: 認可確認
-  AUTHZ-->>PAYMENT: 認可確認結果
+  PAYMENT->>CORE_L3: 認可判定 (AuthZEN Evaluation API: operator_id, 対象APIエンドポイント)
+  CORE_L3->>AUTHZ: 認可判定
+  AUTHZ-->>CORE_L3: 判定結果
+  CORE_L3-->>PAYMENT: 認可結果 (decision)
   PAYMENT->>PAYMENT_DB1: 利用料モデル更新(UPDATE)
   PAYMENT_DB1-->>PAYMENT: 更新結果
   PAYMENT-->>CORE_L2: 200 OK<BR>(利用料モデルID,利用料モデル名,利用料モデル情報)
@@ -79,8 +83,10 @@ opt 利用料モデル取得
   CORE_L2->>PAYMENT: GET /api/v1/fee-model/{利用料モデルID}<BR>(アクセストークン)
   PAYMENT->>CORE_L3: アクセストークン検証
   CORE_L3-->>PAYMENT: OK
-  PAYMENT->>AUTHZ: 認可確認
-  AUTHZ-->>PAYMENT: 認可確認結果
+  PAYMENT->>CORE_L3: 認可判定 (AuthZEN Evaluation API: operator_id, 対象APIエンドポイント)
+  CORE_L3->>AUTHZ: 認可判定
+  AUTHZ-->>CORE_L3: 判定結果
+  CORE_L3-->>PAYMENT: 認可結果 (decision)
   PAYMENT->>PAYMENT_DB1: 指定したIDの利用料モデルを取得(SELECT)
   PAYMENT_DB1-->>PAYMENT: 指定した利用料モデル情報
   PAYMENT-->>CORE_L2: 200 OK<BR>(利用料モデルID,利用料モデル名,利用料モデル情報)
@@ -94,8 +100,10 @@ opt 利用料モデル削除
   CORE_L2->>PAYMENT: DELETE /api/v1/fee-model/{利用料モデルID}<BR>(アクセストークン)
   PAYMENT->>CORE_L3: アクセストークン検証
   CORE_L3-->>PAYMENT: OK
-  PAYMENT->>AUTHZ: 認可確認
-  AUTHZ-->>PAYMENT: 認可確認結果
+  PAYMENT->>CORE_L3: 認可判定 (AuthZEN Evaluation API: operator_id, 対象APIエンドポイント)
+  CORE_L3->>AUTHZ: 認可判定
+  AUTHZ-->>CORE_L3: 判定結果
+  CORE_L3-->>PAYMENT: 認可結果 (decision)
   PAYMENT->>PAYMENT_DB1: 指定した利用料モデルを削除(DELETE)
   PAYMENT_DB1-->>PAYMENT: 削除結果
   PAYMENT-->>CORE_L2: 204 No Content
@@ -109,8 +117,10 @@ opt 利用料モデル一覧取得
   CORE_L2->>PAYMENT: GET /api/v1/fee-model<BR>(アクセストークン)
   PAYMENT->>CORE_L3: アクセストークン検証
   CORE_L3-->>PAYMENT: OK
-  PAYMENT->>AUTHZ: 認可確認
-  AUTHZ-->>PAYMENT: 認可確認結果
+  PAYMENT->>CORE_L3: 認可判定 (AuthZEN Evaluation API: operator_id, 対象APIエンドポイント)
+  CORE_L3->>AUTHZ: 認可判定
+  AUTHZ-->>CORE_L3: 判定結果
+  CORE_L3-->>PAYMENT: 認可結果 (decision)
   PAYMENT->>PAYMENT_DB1: 利用料モデルを取得(SELECT)
   PAYMENT_DB1-->>PAYMENT: 利用料モデル一覧
   PAYMENT-->>CORE_L2: 200 OK<BR>(利用料モデルID,利用料モデル名,利用料モデル情報)
@@ -162,41 +172,51 @@ CORE_L3-->>P_SA: IDトークン+アクセストークン
 %% --- 取引可否確認 ---
 opt 取引可否確認
   C->>C_SA: 取引可否確認
-  C_SA->>CORE_L2: POST /api/v1/data-exchange/transaction/eligibility<BR>(アクセストークン)
-  CORE_L2->>PAYMENT: POST /api/v1/data-exchange/transaction/eligibility<BR>(アクセストークン)
+  C_SA->>C_SA: X-TrackingId を生成（取引可否確認用）
+  C_SA->>CORE_L2: POST /api/v1/data-exchange/transaction/eligibility<BR>(アクセストークン, X-TrackingId: 取引可否確認用)
+  CORE_L2->>PAYMENT: POST /api/v1/data-exchange/transaction/eligibility<BR>(アクセストークン, X-TrackingId)
   PAYMENT->>CORE_L3: アクセストークン検証
   CORE_L3-->>PAYMENT: OK
   PAYMENT->>PAYMENT: アクセストークンからOperatorIDを取得
-  PAYMENT->>AUTHZ: 認可確認
-  AUTHZ-->>PAYMENT: 認可確認結果
+  PAYMENT->>CORE_L3: 認可判定 (AuthZEN Evaluation API: operator_id, 対象APIエンドポイント)
+  CORE_L3->>AUTHZ: 認可判定
+  AUTHZ-->>CORE_L3: 判定結果
+  CORE_L3-->>PAYMENT: 認可結果 (decision)
   PAYMENT->>PAYMENT_DUMMY: ユーザIDに紐づく取引可否情報を取得(SELECT)
   PAYMENT_DUMMY-->>PAYMENT: 取引可否情報
+  PAYMENT->>PAYMENT_DB1: 取引を事前登録(INSERT, tracking_id・eligibility_tracking_id = 取引可否確認の X-TrackingId)
+  PAYMENT_DB1-->>PAYMENT: 登録結果
   PAYMENT-->>CORE_L2: 200 OK<BR>(取引可否)
   CORE_L2-->>C_SA: 200 OK<BR>(取引可否)
 end
 
 opt データ取得
   C->>C_SA: データ取得
-  C_SA->>CORE_L2: データ取得<BR>(アクセストークン)
+  C_SA->>C_SA: X-TrackingId を生成（データ取得用）して保持
+  C_SA->>CORE_L2: データ取得<BR>(アクセストークン, X-TrackingId: データ取得用)
   CORE_L2->>C_SA: データ取得<BR>(アクセストークン)
-  C_SA->>CORE_L2: データ取得
+  C_SA->>CORE_L2: データ取得<BR>(X-TrackingId)
   CORE_L2->CORE_L3: トークン検証
   CORE_L3-->CORE_L2: 200OK
-  CORE_L2->>P_SA: データ取得
+  CORE_L2->>P_SA: データ取得<BR>(X-TrackingId を転送)
+  P_SA->>P_SA: X-TrackingId ヘッダの値を保持
   P_SA-->>CORE_L2: 200 OK
+  CORE_L2->>CORE_L2: ゲートウェイログを記録<BR>(trackingId, statusCode)
   CORE_L2-->>C_SA: 200 OK
   C_SA-->>C: 200 OK
 end
 
 opt データ交換登録(データ提供者)
   P->>P_SA: データ交換情報登録
-  P_SA->>CORE_L2: データ交換情報登録 POST /api/v1/data-exchange/status <BR>(アクセストークン)
-  CORE_L2->>PAYMENT: データ交換情報登録 POST /api/v1/data-exchange/status <BR>(アクセストークン)
+  P_SA->>CORE_L2: データ交換情報登録 POST /api/v1/data-exchange/status <BR>(アクセストークン, X-TrackingId: 登録用, tracking_id: データ取得の X-TrackingId)
+  CORE_L2->>PAYMENT: データ交換情報登録 POST /api/v1/data-exchange/status <BR>(アクセストークン, tracking_id)
   PAYMENT->>CORE_L3: アクセストークン検証
   CORE_L3-->>PAYMENT: OK
-  PAYMENT->>AUTHZ: 認可確認
-  AUTHZ-->>PAYMENT: 認可確認結果
-  PAYMENT->>PAYMENT_DB1: 取引情報登録・更新(INSERT/UPDATE)
+  PAYMENT->>CORE_L3: 認可判定 (AuthZEN Evaluation API: operator_id, 対象APIエンドポイント)
+  CORE_L3->>AUTHZ: 認可判定
+  AUTHZ-->>CORE_L3: 判定結果
+  CORE_L3-->>PAYMENT: 認可結果 (decision)
+  PAYMENT->>PAYMENT_DB1: 事前登録の引き当て・取引情報登録・更新(INSERT/UPDATE)
   PAYMENT_DB1-->>PAYMENT: 登録結果
   PAYMENT-->>CORE_L2: 200 OK
   CORE_L2-->>P_SA: 200 OK
@@ -204,19 +224,34 @@ end
 
 opt データ交換登録(データ消費者)
   C->>C_SA: データ交換情報登録
-  C_SA->>CORE_L2: データ交換情報登録 POST /api/v1/data-exchange/status<BR>(アクセストークン)
-  CORE_L2->>PAYMENT: データ交換情報登録 POST /api/v1/data-exchange/status<BR>(アクセストークン)
+  C_SA->>CORE_L2: データ交換情報登録 POST /api/v1/data-exchange/status<BR>(アクセストークン, X-TrackingId: 登録用, tracking_id: データ取得の X-TrackingId)
+  CORE_L2->>PAYMENT: データ交換情報登録 POST /api/v1/data-exchange/status<BR>(アクセストークン, tracking_id)
   PAYMENT->>CORE_L3: アクセストークン検証
   CORE_L3-->>PAYMENT: OK
-  PAYMENT->>AUTHZ: 認可確認
-  AUTHZ-->>PAYMENT: 認可確認結果
-  PAYMENT->>PAYMENT_DB1: 取引情報登録・更新(INSERT/UPDATE)
+  PAYMENT->>CORE_L3: 認可判定 (AuthZEN Evaluation API: operator_id, 対象APIエンドポイント)
+  CORE_L3->>AUTHZ: 認可判定
+  AUTHZ-->>CORE_L3: 判定結果
+  CORE_L3-->>PAYMENT: 認可結果 (decision)
+  PAYMENT->>PAYMENT_DB1: 事前登録の引き当て・取引情報登録・更新(INSERT/UPDATE)
   PAYMENT_DB1-->>PAYMENT: 登録結果
   PAYMENT-->>CORE_L2: 200 OK
   CORE_L2-->>C_SA: 200 OK
 end
 
 ```
+
+
+> **トラッキングIDの取り扱い（取引可否確認・データ取得・データ交換状態登録の紐付け）**
+>
+> - 取引可否確認・データ取得・データ交換状態登録などの呼び出しの `X-TrackingId` は、それぞれ別の値（UUID）とする。データ取得の `X-TrackingId` と、データ交換状態登録の本文の `tracking_id` を同じ値にすることで、取引と L2 のゲートウェイログ（データ取得の呼び出し）を紐付ける。
+> - データ利用者は、データ取得のリクエストに `X-TrackingId` を付けて L2 経由でデータを取得し、同じ値をデータ交換状態登録の本文の `tracking_id` に指定すること（`X-TrackingId` が無い場合は L2 が新しい値を生成するため、データ利用者が値を把握できない）。
+> - データ提供者は、L2 から転送されたデータ取得のリクエストの `X-TrackingId` ヘッダの値を保持し、データ交換状態登録の本文の `tracking_id` に指定すること。精算決済 API を呼び出す際は、この値を `X-TrackingId` ヘッダに転送しないこと（データ取得と同じ trackingId で精算決済 API の呼び出しが L2 のログに記録され、L2 ログ突合の判定に影響するため）。
+> - 取引可否確認 API は与信 OK 時に、取引可否確認の `X-TrackingId` を `transactions.tracking_id` と `eligibility_tracking_id` に保存して取引を事前登録する（応答には含めない）。同じ `X-TrackingId` で再送された場合は、`eligibility_tracking_id` で事前登録を探し、同じ内容で事前登録のままなら再登録せずに許可を返す。内容が異なる場合と、事前登録がデータ交換に引き当て済みの場合は 409 とする。
+> - データ交換状態登録 API（POST /api/v1/data-exchange/status）は、本文の `tracking_id` の行がまだ無いデータ ID について、当事者（provider_id・consumer_id）・データ ID が一致し、両当事者とも未報告・未精算・未請求・NP 取引登録済みで、作成から 24 時間以内の事前登録を、作成日時の古いものから 1 件引き当て、`tracking_id` を本文の値に付け替える（`eligibility_tracking_id` は付け替えない）。同じ当事者・データの事前登録が複数あっても、1 つの `tracking_id` に引き当てるのはデータ ID ごとに 1 件とする。引き当てなかった事前登録は、24 時間経過後に L2 ログ突合 CronJob が NP 取引をキャンセルする。
+> - 利用料モデルなしの取引金額確定 API（POST /api/v1/data-exchange/non-fee-model/confirm）も、本文の `tracking_id`（必須）にデータ取得の `X-TrackingId` を指定する。事前登録は、当事者・決済サービス・金額・税率・税区分が一致するものを同様に引き当てる。
+> - データ交換状態登録・取引金額確定の `tracking_id` に取引可否確認の `X-TrackingId`（`eligibility_tracking_id` の値）を指定した場合は、事前登録が別のデータ交換に引き当て済みでも 409 とする（その値の L2 ログは取引可否確認の呼び出しのもので、データ取得の結果を確認できないため）。データ交換状態更新 API（PUT）では 404 とする。
+> - 1 つの `tracking_id` は利用料モデルありと利用料モデルなしのどちらか一方のデータ交換にだけ使える。もう一方の API で同じ `tracking_id` を指定した場合は 409 とする。
+> - L2 ログ突合 CronJob は、`trackingId` が `tracking_id` に一致する L2 の応答ログ（gatewayResponse）の `statusCode` で、データ交換の成否を判定する。データ取得の再試行などで同じ `trackingId` の応答ログが複数ある場合は、2xx が 1 件でもあれば成功とし、無ければ最後に記録されたものを採用する（1 回の実行で読み込んだ応答ログの中では、成否の判定がログの記録順に依存しない）。ステータスコードを記録した取引は、後の実行で読み込んだ応答ログでは更新しない。
 
 ### (3) 購入確定処理シーケンス
 
@@ -265,9 +300,11 @@ end
 
 ```
 
+> 確定・キャンセルの判定条件は `cronjob/docs/feature-spec-checkl2log.md`「2.3 確定判定」を参照。
+
 ### (4) 決済処理シーケンス
 
-- ※消費者データ交換ステータス、提供者データ交換ステータスが交換完了、L2ログステータスが成功しているTransactionを請求予定額、支払い予定額の対象とする。
+- ※消費者データ交換ステータス、提供者データ交換ステータスが交換完了で、L2ログステータスが成功（2xx）であるTransactionを請求予定額、支払い予定額の対象とする。
 
 ```mermaid 
 ---
@@ -314,8 +351,10 @@ CORE_L2->>PAYMENT:　POST /api/v1/billing<BR>(アクセストークン)
 PAYMENT->>CORE_L3: アクセストークン検証/権限確認
 CORE_L3-->>PAYMENT: OK
 PAYMENT->>PAYMENT: アクセストークンからOperatorIDを取得
-PAYMENT->>AUTHZ: 認可確認
-AUTHZ-->>PAYMENT: 認可確認結果
+PAYMENT->>CORE_L3: 認可判定 (AuthZEN Evaluation API: operator_id, 対象APIエンドポイント)
+CORE_L3->>AUTHZ: 認可判定
+AUTHZ-->>CORE_L3: 判定結果
+CORE_L3-->>PAYMENT: 認可結果 (decision)
 PAYMENT->>PAYMENT_DB: 請求情報取得
 PAYMENT_DB-->>PAYMENT: 請求情報
 PAYMENT-->>CORE_L2: 200 OK
@@ -333,8 +372,10 @@ CORE_L2->>PAYMENT:　POST /api/v1/payment<BR>(アクセストークン)
 PAYMENT->>CORE_L3: アクセストークン検証/権限確認
 CORE_L3-->>PAYMENT: OK
 PAYMENT->>PAYMENT: アクセストークンからOperatorIDを取得
-PAYMENT->>AUTHZ: 認可確認
-AUTHZ-->>PAYMENT: 認可確認結果
+PAYMENT->>CORE_L3: 認可判定 (AuthZEN Evaluation API: operator_id, 対象APIエンドポイント)
+CORE_L3->>AUTHZ: 認可判定
+AUTHZ-->>CORE_L3: 判定結果
+CORE_L3-->>PAYMENT: 認可結果 (decision)
 PAYMENT->>PAYMENT_DB: 支払情報取得
 PAYMENT_DB-->>PAYMENT: 支払情報
 PAYMENT-->>CORE_L2: 200 OK
@@ -390,8 +431,10 @@ CORE_L2->>PAYMENT: POST /api/v1/data-exchange/settlement/transactions<BR>(アク
 PAYMENT->>CORE_L3: アクセストークン検証
 CORE_L3-->>PAYMENT: OK
 PAYMENT->>PAYMENT: アクセストークンからOperatorIDを取得(provider_id)
-PAYMENT->>AUTHZ: 認可確認
-AUTHZ-->>PAYMENT: 認可確認結果
+PAYMENT->>CORE_L3: 認可判定 (AuthZEN Evaluation API: operator_id, 対象APIエンドポイント)
+CORE_L3->>AUTHZ: 認可判定
+AUTHZ-->>CORE_L3: 判定結果
+CORE_L3-->>PAYMENT: 認可結果 (decision)
 PAYMENT->>PAYMENT_DB: トランザクション情報取得(SELECT)
 PAYMENT_DB-->>PAYMENT: トランザクション一覧
 PAYMENT-->>CORE_L2: 200 OK<BR>(transactions, total_count)
@@ -442,29 +485,44 @@ CORE_L3-->>C_SA: IDトークン+アクセストークン
 %% --- 取引可否確認（利用料モデルなし） ---
 opt 取引可否確認（利用料モデルなし）
   C->>C_SA: 取引可否確認
-  C_SA->>CORE_L2: POST /api/v1/data-exchange/non-fee-model/transaction/eligibility<BR>(アクセストークン,provider_id,consumer_id,data_id,price,tax_rate,tax_classification)
-  CORE_L2->>PAYMENT: POST /api/v1/data-exchange/non-fee-model/transaction/eligibility<BR>(アクセストークン,取引情報)
+  C_SA->>C_SA: X-TrackingId を生成（取引可否確認用）
+  C_SA->>CORE_L2: POST /api/v1/data-exchange/non-fee-model/transaction/eligibility<BR>(アクセストークン, X-TrackingId: 取引可否確認用,provider_id,consumer_id,payment_service_id,amount,tax_rate,tax_classification)
+  CORE_L2->>PAYMENT: POST /api/v1/data-exchange/non-fee-model/transaction/eligibility<BR>(アクセストークン, X-TrackingId,取引情報)
   PAYMENT->>CORE_L3: アクセストークン検証
   CORE_L3-->>PAYMENT: OK
   PAYMENT->>PAYMENT: アクセストークンからOperatorIDを取得
-  PAYMENT->>AUTHZ: 認可確認
-  AUTHZ-->>PAYMENT: 認可確認結果
+  PAYMENT->>CORE_L3: 認可判定 (AuthZEN Evaluation API: operator_id, 対象APIエンドポイント)
+  CORE_L3->>AUTHZ: 認可判定
+  AUTHZ-->>CORE_L3: 判定結果
+  CORE_L3-->>PAYMENT: 認可結果 (decision)
   PAYMENT->>PAYMENT_DUMMY: ユーザIDに紐づく取引可否情報を取得
   PAYMENT_DUMMY-->>PAYMENT: 取引可否情報
-  PAYMENT-->>CORE_L2: 200 OK<BR>(取引可否,tracking_id)
-  CORE_L2-->>C_SA: 200 OK<BR>(取引可否,tracking_id)
+  PAYMENT->>PAYMENT_DB1: 取引を事前登録(INSERT, tracking_id・eligibility_tracking_id = 取引可否確認の X-TrackingId)
+  PAYMENT_DB1-->>PAYMENT: 登録結果
+  PAYMENT-->>CORE_L2: 200 OK<BR>(取引可否)
+  CORE_L2-->>C_SA: 200 OK<BR>(取引可否)
+end
+
+opt データ取得
+  C->>C_SA: データ取得
+  C_SA->>C_SA: X-TrackingId を生成（データ取得用）して保持
+  C_SA->>CORE_L2: データ取得<BR>(アクセストークン, X-TrackingId: データ取得用)
+  CORE_L2->>CORE_L2: ゲートウェイログを記録<BR>(trackingId, statusCode)
+  CORE_L2-->>C_SA: 200 OK
 end
 
 %% --- データ交換取引金額確定（利用料モデルなし） ---
 opt データ交換取引金額確定（利用料モデルなし）
   C->>C_SA: 取引金額確定
-  C_SA->>CORE_L2: POST /api/v1/data-exchange/non-fee-model/confirm<BR>(アクセストークン,tracking_id,price,tax_rate,tax_classification)
-  CORE_L2->>PAYMENT: POST /api/v1/data-exchange/non-fee-model/confirm<BR>(アクセストークン,確定情報)
+  C_SA->>CORE_L2: POST /api/v1/data-exchange/non-fee-model/confirm<BR>(アクセストークン, X-TrackingId: 確定用, tracking_id: データ取得の X-TrackingId,payment_service_id,amount,tax_rate,tax_classification)
+  CORE_L2->>PAYMENT: POST /api/v1/data-exchange/non-fee-model/confirm<BR>(アクセストークン,tracking_id,確定情報)
   PAYMENT->>CORE_L3: アクセストークン検証
   CORE_L3-->>PAYMENT: OK
-  PAYMENT->>AUTHZ: 認可確認
-  AUTHZ-->>PAYMENT: 認可確認結果
-  PAYMENT->>PAYMENT_DB1: 取引情報更新(UPDATE)
+  PAYMENT->>CORE_L3: 認可判定 (AuthZEN Evaluation API: operator_id, 対象APIエンドポイント)
+  CORE_L3->>AUTHZ: 認可判定
+  AUTHZ-->>CORE_L3: 判定結果
+  CORE_L3-->>PAYMENT: 認可結果 (decision)
+  PAYMENT->>PAYMENT_DB1: 事前登録の引き当て・取引情報更新(UPDATE)
   PAYMENT_DB1-->>PAYMENT: 更新結果
   PAYMENT-->>CORE_L2: 200 OK<BR>(確定結果)
   CORE_L2-->>C_SA: 200 OK<BR>(確定結果)
@@ -693,6 +751,7 @@ CREATE INDEX ix_payment_user_consumer_provider ON payment_service_user_registrat
 | --- | --- | --- | --- |
 | transaction_id | uuid | **PK**, DEFAULT gen_random_uuid() | 取引ID |
 | tracking_id | uuid | **NOT NULL**, INDEX | トラッキングID |
+| eligibility_tracking_id | uuid | NULL | 取引可否確認のトラッキングID（取引可否確認で事前登録した取引のみ。事前登録を引き当てた後も残す） |
 | external_transaction_id | varchar(20) | NULL, INDEX | 外部取引ID（外部決済サービスのレスポンスから取得） |
 | fee_model_history_id | uuid | NULL, **FK** → fee_model_history.fee_model_history_id | 使用した履歴バージョンID(利用料モデル無しの場合NULL) |
 | payment_service_user_id | uuid | NULL, **FK** → payment_service_user_registrations.payment_service_user_id | 決済サービスユーザID(利用料モデル無しの場合NULL) |
@@ -705,12 +764,13 @@ CREATE INDEX ix_payment_user_consumer_provider ON payment_service_user_registrat
 | calculated_amount | numeric(15,2) | **NOT NULL** | 計算済金額(税込) |
 | consumer_exchange_status | varchar(50) | **NOT NULL**, DEFAULT 'pending', CHECK (IN ('pending', 'completed', 'failed')) | 消費者データ交換ステータス |
 | provider_exchange_status | varchar(50) | **NOT NULL**, DEFAULT 'pending', CHECK (IN ('pending', 'completed', 'failed')) | 提供者データ交換ステータス |
-| l2_http_status | varchar(10) | **NOT NULL**, DEFAULT 'pending' | L2ログHTTPステータス(pending/HTTPステータスコード) |
+| l2_http_status | varchar(10) | **NOT NULL**, DEFAULT 'pending' | L2ログHTTPステータス(pending/HTTPステータスコード/timeout。2xx を成功とする) |
 | settlement_status | varchar(50) | **NOT NULL**, DEFAULT 'unsettled', CHECK (IN ('settled', 'unsettled', 'cancelled')) | 精算決済状態 |
 | order_details | text | NULL | 注文内容 |
 | request_date | timestamptz | NULL | 請求日 |
 | payment_deadline | timestamptz | NULL, CHECK (>= request_date) | 支払期限 |
 | paid_at | timestamptz | NULL | 支払完了日時 |
+| completed_at | timestamptz | NULL | データ交換完了日時（支払/請求の期間判定に使用） |
 | external_data | jsonb | NULL | 外部決済サービス固有データ |
 | created_at | timestamptz | **NOT NULL**, DEFAULT now() | 登録日時 |
 | updated_at | timestamptz | **NOT NULL**, DEFAULT now() | 更新日時 |
@@ -731,11 +791,15 @@ CREATE INDEX ix_payment_user_consumer_provider ON payment_service_user_registrat
 | ix_transactions_settlement_status | settlement_status | INDEX | 精算決済状態検索用 |
 | ix_transaction_provider_consumer_data | provider_id, consumer_id, data_id | INDEX | 複合検索用 |
 | ix_transaction_request_date | request_date | INDEX | 請求日検索用 |
+| ix_transactions_effective_completed_at | COALESCE(completed_at, created_at) | INDEX | 期間判定・L2ログ突合の対象判定（データ交換完了日時、未設定時は created_at）用 |
+| uq_transaction_tracking_data | tracking_id, COALESCE(data_id, '') | UNIQUE（tracking_id IS NOT NULL の行のみ） | 同一 tracking_id 配下での data_id の重複防止 |
+| uq_transaction_eligibility_tracking_data | eligibility_tracking_id, COALESCE(data_id, '') | UNIQUE（eligibility_tracking_id IS NOT NULL の行のみ） | 1 回の取引可否確認で事前登録する data_id の重複防止 |
 
 ```sql
 CREATE TABLE IF NOT EXISTS transactions (
   transaction_id               uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   tracking_id                  uuid NOT NULL,
+  eligibility_tracking_id      uuid,
   external_transaction_id      varchar(20),
   fee_model_history_id         uuid REFERENCES fee_model_history(fee_model_history_id) ON DELETE RESTRICT,
   payment_service_user_id      uuid REFERENCES payment_service_user_registrations(payment_service_user_id) ON DELETE RESTRICT,
@@ -754,6 +818,7 @@ CREATE TABLE IF NOT EXISTS transactions (
   request_date                 timestamptz NULL,
   payment_deadline             timestamptz NULL,
   paid_at                      timestamptz NULL,
+  completed_at                 timestamptz NULL,
   external_data                jsonb,
   created_at                   timestamptz NOT NULL DEFAULT now(),
   updated_at                   timestamptz NOT NULL DEFAULT now(),
@@ -778,6 +843,9 @@ CREATE INDEX ix_transactions_l2_http_status ON transactions(l2_http_status);
 CREATE INDEX ix_transactions_settlement_status ON transactions(settlement_status);
 CREATE INDEX ix_transaction_provider_consumer_data ON transactions(provider_id, consumer_id, data_id);
 CREATE INDEX ix_transaction_request_date ON transactions(request_date);
+CREATE INDEX ix_transactions_effective_completed_at ON transactions(COALESCE(completed_at, created_at));
+CREATE UNIQUE INDEX uq_transaction_tracking_data ON transactions(tracking_id, COALESCE(data_id, '')) WHERE tracking_id IS NOT NULL;
+CREATE UNIQUE INDEX uq_transaction_eligibility_tracking_data ON transactions(eligibility_tracking_id, COALESCE(data_id, '')) WHERE eligibility_tracking_id IS NOT NULL;
 ```
 
 ---
@@ -791,6 +859,20 @@ CREATE INDEX ix_transaction_request_date ON transactions(request_date);
 | fee_models | fee_model_history | 1:N | fee_model_id | CASCADE |
 | fee_model_history | transactions | 1:N | fee_model_history_id | RESTRICT |
 | payment_service_user_registrations | transactions | 1:N | payment_service_user_id | RESTRICT |
+
+### 2.3 排他制御
+
+トランザクション分離レベルは PostgreSQL の既定（READ COMMITTED）とし、競合する処理ごとに以下の方式で排他する。
+
+| 対象 | 競合するケース | 方式 | 競合時の動作 |
+| --- | --- | --- | --- |
+| 利用料モデルの更新<br>（PUT /fee-model/{id}） | 同じ利用料モデルの同時更新・削除 | 楽観的ロック。`version` 列を UPDATE 時の条件（`WHERE version = 読込時の値`）に含め、更新のたびに +1 する。リクエストで `version` を指定した場合は現在値と照合する | 409（後から更新した側） |
+| 利用料モデルの登録・有効化<br>（POST /fee-model、PUT /fee-model/{id}） | 同じ provider_id / consumer_id / data_id の有効なモデルの同時登録・同時有効化 | 部分一意インデックス `uq_fee_model_active`（`is_active = true` の行のみ） | 409 |
+| 取引の事前登録<br>（取引可否確認 API） | 同じ X-TrackingId での同時実行・再送 | 一意インデックス `uq_transaction_eligibility_tracking_data`（`eligibility_tracking_id`, `COALESCE(data_id, '')`）と `uq_transaction_tracking_data`（`tracking_id`, `COALESCE(data_id, '')`）。同じ内容の再送は既存行を返す（冪等） | 別内容、または事前登録がデータ交換に引き当て済みの場合は 409。同時実行で一意制約に違反した側は、NP に登録済みの取引を補償キャンセルしたうえで 409 |
+| 取引の状態登録・更新・金額確定<br>（POST・PUT /data-exchange/status、POST /data-exchange/non-fee-model/confirm） | 提供者・利用者の同時報告、同じリクエストの同時再送、L2ログ突合 CronJob の確定処理 | 悲観的ロック。状態登録・金額確定は、tracking_id 単位の advisory lock（`pg_advisory_xact_lock`）で同じ tracking_id の処理を直列化したうえで、tracking_id 配下の行を `SELECT ... FOR UPDATE` でロックしてから判定・更新する（最初の報告では行がまだ無いため、advisory lock で排他する）。ロック待ちは `DB_LOCK_TIMEOUT` 秒（既定 3 秒）まで | 後続は先行のコミットを待ち、最新の状態で判定する（先行が引き当てた事前登録を使う）。待ちが上限を超えた場合は 503（`Retry-After` 付き） |
+| 事前登録の引き当て<br>（POST /data-exchange/status、POST /data-exchange/non-fee-model/confirm） | 別の tracking_id のデータ交換による同じ事前登録の引き当て、L2ログ突合 CronJob の 24 時間経過のキャンセル | 引き当てる事前登録を `SELECT ... FOR UPDATE SKIP LOCKED` でロックする | ロック中の事前登録は飛ばし、次に古い事前登録を引き当てる（無ければ与信が必要なため 404） |
+| L2ログ突合 CronJob の確定・請求確定・キャンセル | 状態登録・更新 API との同時実行 | 対象行を行ロック（請求確定・キャンセルは `SELECT ... FOR UPDATE SKIP LOCKED`）し、NP への依頼と更新が終わるまで保持する | API が処理中の行は次回実行で再判定する。CronJob が先にロックした場合、API は CronJob の処理後の状態で判定する |
+| L2ログ突合 CronJob の多重起動 | 前回実行が終わる前の次回起動、手動実行との重複 | CronJob の `concurrencyPolicy: Forbid` に加え、実行中は PostgreSQL の advisory lock（`pg_try_advisory_lock`）を保持する | 後から起動した実行は何もせず終了（NP 請求確定依頼・キャンセル依頼を重複させない） |
 
 
 ## 3. ログ設計
@@ -927,7 +1009,8 @@ logger.info(
 
 | 版   | 日付         | 変更点                                                                                                       |
 | --- | ---------- | --------------------------------------------------------------------------------------------------------- |
-| 1.0 | 2026-02-28 | 第1.0版 |
-| 1.1 | 2026-08-31 | 第1.1版 |
+| 1.0 | 2026-02-28 | 初版 |
+| 1.1 | 2026-08-31 | シーケンス図を見直し（L2 をバイパスしている箇所、ログ参照先、購入処理シーケンス）。payment と billing の説明、認可方式の記載を追加。改訂履歴を追加 |
+| 1.2 | 2026-09-30 | 取引可否確認 API の事前登録を、データ交換状態登録・取引金額確定 API で当事者・データ ID ごとに 1 件ずつ引き当てる方式に変更。購入処理シーケンスに X-TrackingId・tracking_id の受け渡しを記載。支払/請求の期間判定にデータ交換完了日時（completed_at）を使用。L2 ログ突合の成功判定を 2xx に拡大し、timeout を追加。L2 ログ突合で同じ trackingId の応答ログが複数ある場合の判定を定義。排他制御の仕様を追加。認可確認を L3 の認可判定 API（AuthZEN）経由に変更。取引テーブルの制約・インデックスと、取引可否確認のトラッキングID（eligibility_tracking_id）を追加 |
 
 ---

@@ -1,6 +1,5 @@
 """Custom Validators"""
 import re
-from typing import Any
 
 
 def validate_email(email: str) -> bool:
@@ -24,11 +23,3 @@ def validate_password_strength(password: str) -> bool:
     has_digit = any(c.isdigit() for c in password)
     
     return has_upper and has_lower and has_digit
-
-
-def sanitize_string(text: str) -> str:
-    """Sanitize string input"""
-    # Remove potential XSS patterns
-    text = re.sub(r'<script[^>]*>.*?</script>', '', text, flags=re.IGNORECASE | re.DOTALL)
-    text = re.sub(r'<.*?>', '', text)
-    return text.strip()
