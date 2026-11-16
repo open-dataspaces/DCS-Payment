@@ -17,7 +17,7 @@
    X-TrackingId のため、その値を設定する。引き当て済みの行と 1.0.0 で事前登録した行
    （tracking_id が NULL）は、取引可否確認の X-TrackingId が分からないため NULL のままにする。
 
-Revision ID: 005_pk_defaults
+Revision ID: 005_pk_defaults_elig_tracking_id
 Revises: 004_effective_completed_at
 Create Date: 2026-10-27
 
@@ -29,7 +29,7 @@ import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
 # revision identifiers, used by Alembic.
-revision: str = '005_pk_defaults'
+revision: str = '005_pk_defaults_elig_tracking_id'
 down_revision: Union[str, None] = '004_effective_completed_at'
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
