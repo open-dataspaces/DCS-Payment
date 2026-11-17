@@ -105,8 +105,8 @@ class LogConfig:
 
     @property
     def environment(self) -> str:
-        """環境名（dev/staging/prod）"""
-        return os.getenv('ENVIRONMENT', 'development')
+        """環境名（PRODUCTION / DEVELOP）。未設定時は Settings と同じく PRODUCTION"""
+        return os.getenv('ENVIRONMENT', 'PRODUCTION')
 
     @property
     def sqlalchemy_log_level(self) -> str:
@@ -191,9 +191,9 @@ class JSONFormatter(logging.Formatter):
 
         for key, value in record.__dict__.items():
             if key not in standard_keys:
-                # JSONに変換可能な型のみを対象とする
-                if isinstance(value, (str, int, float, bool, list, dict, type(None))):
-                    log_data[key] = value
+                # 基本フィールド（request_id・function など）は extra で上書きせず、別名で残す
+                # JSON に変換できない値（Decimal・UUID・datetime 等）は json.dumps(default=str) で文字列にする
+                log_data[key if key not in log_data else f'extra_{key}'] = value
 
         # 例外情報を追加（exc_infoが有効な例外情報を持つ場合のみ）
         if record.exc_info and record.exc_info[0] is not None:
@@ -322,11 +322,8 @@ class ExtraAdapter(logging.LoggerAdapter):
         # ログ呼び出し時に渡されたカスタム引数を extra にマージ
         kwargs['extra'].update(custom_kwargs)
 
-        # 4. stacklevelを調整（ExtraAdapterを経由するため+1）
-        if 'stacklevel' not in kwargs:
-            kwargs['stacklevel'] = 2
-        else:
-            kwargs['stacklevel'] += 1
+        # stacklevel は調整しない。Python 3.11 以降の findCaller は logging モジュール内の
+        # フレーム（LoggerAdapter を含む）を数えないため、既定値のままでログ呼び出し箇所を指す
 
         return msg, kwargs
 
@@ -368,7 +365,7 @@ def setup_logging(
     if root_logger.handlers:
         root_logger.handlers.clear()
 
-    # フォーマッターの選択
+    # フォーマッターの選択（コンソール用。ファイル出力は _setup_file_handlers で常に JSON）
     if _json_format:
         formatter = JSONFormatter()
     else:
@@ -397,7 +394,7 @@ def setup_logging(
     # 3. ファイルハンドラー（オプション）
     # ============================================================================
     if _file_enabled:
-        _setup_file_handlers(root_logger, formatter)
+        _setup_file_handlers(root_logger)
 
     # ============================================================================
     # 外部ライブラリのログレベル調整（環境変数で制御可能）
@@ -421,8 +418,11 @@ def setup_logging(
     return root_logger
 
 
-def _setup_file_handlers(root_logger: logging.Logger, formatter: logging.Formatter) -> None:
+def _setup_file_handlers(root_logger: logging.Logger) -> None:
     """ファイルハンドラーのセットアップ"""
+
+    # ファイル出力はコンソールの形式（LOG_JSON_FORMAT）によらず JSON（詳細設計 3.2）
+    file_formatter = JSONFormatter()
 
     # 通常ログファイル
     try:
@@ -442,7 +442,7 @@ def _setup_file_handlers(root_logger: logging.Logger, formatter: logging.Formatt
             encoding='utf-8'
         )
         file_handler.setLevel(logging.DEBUG)
-        file_handler.setFormatter(formatter)
+        file_handler.setFormatter(file_formatter)
         root_logger.addHandler(file_handler)
 
     except (PermissionError, OSError) as e:
@@ -468,7 +468,7 @@ def _setup_file_handlers(root_logger: logging.Logger, formatter: logging.Formatt
             encoding='utf-8'
         )
         error_file_handler.setLevel(logging.ERROR)
-        error_file_handler.setFormatter(formatter)
+        error_file_handler.setFormatter(file_formatter)
         root_logger.addHandler(error_file_handler)
 
     except (PermissionError, OSError) as e:
@@ -540,7 +540,7 @@ def log_execution_time(logger: logging.Logger, log_level: str = 'debug'):
     関数の実行時間をログ出力するデコレーター
 
     Args:
-        logger: ロガー
+        logger: ロガー（logging.Logger または get_logger() の ExtraAdapter）
         log_level: ログレベル
     """
 
@@ -552,20 +552,25 @@ def log_execution_time(logger: logging.Logger, log_level: str = 'debug'):
                 result = func(*args, **kwargs)
                 execution_time = time.perf_counter() - start_time
 
+                # logging.Logger でも使えるよう、独自項目はキーワード引数ではなく extra で渡す
                 log_method = getattr(logger, log_level)
                 log_method(
                     f"Function '{func.__name__}' executed",
-                    function=func.__name__,
-                    execution_time_ms=f"{execution_time * 1000:.2f}"
+                    extra={
+                        "function": func.__name__,
+                        "execution_time_ms": f"{execution_time * 1000:.2f}",
+                    },
                 )
                 return result
             except Exception as e:
                 execution_time = time.perf_counter() - start_time
                 logger.error(
                     f"Function '{func.__name__}' failed after {execution_time * 1000:.2f}ms",
-                    function=func.__name__,
-                    execution_time_ms=f"{execution_time * 1000:.2f}",
-                    error=str(e),
+                    extra={
+                        "function": func.__name__,
+                        "execution_time_ms": f"{execution_time * 1000:.2f}",
+                        "error": str(e),
+                    },
                     exc_info=True
                 )
                 raise

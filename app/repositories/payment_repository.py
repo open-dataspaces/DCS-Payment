@@ -5,15 +5,20 @@ Repository Layer - データベースアクセス層
 SQLAlchemyの例外を独自の例外に変換して上位層に伝播
 """
 
-from datetime import date, datetime, timezone
+from datetime import date, datetime, time, timedelta, timezone
+from decimal import Decimal
 from typing import List, Optional, Tuple
 from uuid import UUID
 
+from sqlalchemy import func, or_, text
 from sqlalchemy.exc import IntegrityError as SQLIntegrityError
 from sqlalchemy.orm import Session
+from sqlalchemy.orm.exc import StaleDataError
 
+from app.core.config import settings
 from app.core.custom_exceptions import (
     DuplicateRecordError,
+    OptimisticLockError,
     RecordNotFoundError,
     wrap_database_error,
 )
@@ -27,6 +32,17 @@ from app.models.payment_model import (
 )
 
 logger = get_logger(__name__)
+
+# 支払/請求の期間判定は JST の日付で行う（DB セッションのタイムゾーンに依存させない）
+JST = timezone(timedelta(hours=9))
+
+
+def _completed_in_period(start_date: date, end_date: date):
+    """データ交換完了日時が JST の start_date 0:00 以上、end_date の翌日 0:00 未満である条件"""
+    start = datetime.combine(start_date, time.min, tzinfo=JST)
+    end = datetime.combine(end_date + timedelta(days=1), time.min, tzinfo=JST)
+    completed_at = Transaction.effective_completed_at()
+    return completed_at >= start, completed_at < end
 
 
 class FeeModelRepository:
@@ -195,18 +211,43 @@ class FeeModelRepository:
 
     @wrap_database_error
     def update(self, fee_model: FeeModel) -> FeeModel:
-        """利用料モデルを更新"""
+        """利用料モデルを更新（変更がある場合は flush 時に version が +1 される）"""
+        # rollback 後はオブジェクトの属性が失効し、削除済みの行を読み直すと例外になるため先に控える
+        fee_model_id = fee_model.fee_model_id
+        expected_version = fee_model.version
         logger.debug(
             "Updating fee model",
-            fee_model_id=str(fee_model.fee_model_id),
-            version=fee_model.version
+            fee_model_id=str(fee_model_id),
+            version=expected_version
         )
-        
-        self.db.flush()
-        
+
+        try:
+            self.db.flush()
+        except StaleDataError:
+            # version_id_col による楽観的ロック失敗（他のトランザクションが先に更新・削除済み）
+            self.db.rollback()
+            actual_version = (
+                self.db.query(FeeModel.version)
+                .filter(FeeModel.fee_model_id == fee_model_id)
+                .scalar()
+            )
+            logger.warning(
+                "Optimistic lock failed - fee model was modified concurrently",
+                fee_model_id=str(fee_model_id),
+                expected_version=expected_version,
+                actual_version=actual_version,
+            )
+            if actual_version is None:
+                raise RecordNotFoundError(entity="Fee model", identifier=fee_model_id)
+            raise OptimisticLockError(
+                entity="fee_model",
+                expected_version=expected_version,
+                actual_version=actual_version,
+            )
+
         logger.info(
             "Fee model updated successfully",
-            fee_model_id=str(fee_model.fee_model_id),
+            fee_model_id=str(fee_model_id),
             fee_model_name=fee_model.fee_model_name,
             version=fee_model.version
         )
@@ -216,18 +257,37 @@ class FeeModelRepository:
     @wrap_database_error
     def delete(self, fee_model: FeeModel) -> None:
         """利用料モデルを削除"""
+        # rollback 後はオブジェクトの属性が失効し、削除済みの行を読み直すと例外になるため先に控える
+        fee_model_id = fee_model.fee_model_id
         logger.info(
             "Deleting fee model",
-            fee_model_id=str(fee_model.fee_model_id),
+            fee_model_id=str(fee_model_id),
             fee_model_name=fee_model.fee_model_name
         )
         
-        self.db.delete(fee_model)
-        self.db.flush()
+        expected_version = fee_model.version
+        try:
+            self.db.delete(fee_model)
+            self.db.flush()
+        except StaleDataError:
+            # 読込後に他のトランザクションが更新・削除した（version_id_col による楽観的ロック失敗）
+            self.db.rollback()
+            actual_version = (
+                self.db.query(FeeModel.version)
+                .filter(FeeModel.fee_model_id == fee_model_id)
+                .scalar()
+            )
+            if actual_version is None:
+                raise RecordNotFoundError(entity="Fee model", identifier=fee_model_id)
+            raise OptimisticLockError(
+                entity="fee_model",
+                expected_version=expected_version,
+                actual_version=actual_version,
+            )
         
         logger.info(
             "Fee model deleted successfully",
-            fee_model_id=str(fee_model.fee_model_id)
+            fee_model_id=str(fee_model_id)
         )
 
     @wrap_database_error
@@ -269,6 +329,16 @@ class FeeModelRepository:
 
 class FeeModelHistoryRepository:
     """利用料モデル履歴のリポジトリ"""
+
+    @wrap_database_error
+    def is_referenced_by_transactions(self, fee_model_id: UUID) -> bool:
+        """利用料モデルの履歴（価格スナップショット）を参照している取引があるか"""
+        return (
+            self.db.query(Transaction.transaction_id)
+            .join(FeeModelHistory, Transaction.fee_model_history_id == FeeModelHistory.fee_model_history_id)
+            .filter(FeeModelHistory.fee_model_id == fee_model_id)
+            .first()
+        ) is not None
 
     def __init__(self, db: Session):
         self.db = db
@@ -461,15 +531,28 @@ class TransactionRepository:
         return transaction
 
     @wrap_database_error
-    def get_all_by_tracking_id(self, tracking_id: UUID) -> List[Transaction]:
-        """トラッキングIDで全ての取引を取得"""
-        logger.debug("Fetching all transactions by tracking ID", tracking_id=str(tracking_id))
+    def get_all_by_tracking_id(self, tracking_id: UUID, for_update: bool = False) -> List[Transaction]:
+        """トラッキングIDで全ての取引を取得
 
-        transactions = (
-            self.db.query(Transaction)
-            .filter(Transaction.tracking_id == tracking_id)
-            .all()
+        Args:
+            for_update: True の場合、SELECT ... FOR UPDATE で行ロックを取得する。
+                状態の判定と更新の間に他のリクエストや CronJob が同じ行を変更しないよう、
+                状態を更新する処理で使用する（ロックはコミット/ロールバックまで保持）。
+        """
+        logger.debug(
+            "Fetching all transactions by tracking ID",
+            tracking_id=str(tracking_id),
+            for_update=for_update,
         )
+
+        query = self.db.query(Transaction).filter(Transaction.tracking_id == tracking_id)
+        if for_update:
+            # CronJob が NP 呼び出し中にロックを保持している場合などに待ち続けないよう、
+            # 待ちの上限を超えたら LockTimeoutError（503・再送可）にする
+            self._set_lock_timeout()
+            # ロック順序を固定してデッドロックを避ける
+            query = query.order_by(Transaction.transaction_id).with_for_update()
+        transactions = query.all()
 
         logger.debug(
             "Transactions found",
@@ -477,6 +560,128 @@ class TransactionRepository:
             count=len(transactions)
         )
         return transactions
+
+    @wrap_database_error
+    def get_all_using_tracking_id(self, tracking_id: UUID) -> List[Transaction]:
+        """この値を取引可否確認の X-TrackingId（eligibility_tracking_id）、またはデータ交換の
+        tracking_id として使っている取引を取得する
+
+        取引可否確認の再送の判定に使う。事前登録をデータ交換に引き当てて tracking_id を
+        付け替えた後も、同じ取引可否確認で事前登録した行を見つける。
+        """
+        transactions = (
+            self.db.query(Transaction)
+            .filter(or_(
+                Transaction.tracking_id == tracking_id,
+                Transaction.eligibility_tracking_id == tracking_id,
+            ))
+            .all()
+        )
+        logger.debug(
+            "Transactions using tracking ID found",
+            tracking_id=str(tracking_id),
+            count=len(transactions),
+        )
+        return transactions
+
+    @wrap_database_error
+    def exists_by_eligibility_tracking_id(self, tracking_id: UUID) -> bool:
+        """この値を X-TrackingId とする取引可否確認で事前登録した取引があるか（引き当て済みを含む）"""
+        query = self.db.query(Transaction).filter(Transaction.eligibility_tracking_id == tracking_id)
+        return self.db.query(query.exists()).scalar()
+
+    @wrap_database_error
+    def lock_tracking_id(self, tracking_id: UUID) -> None:
+        """同じ tracking_id への状態登録・金額確定を直列化する（トランザクション終了まで保持）
+
+        最初の報告では tracking_id の行がまだ無く、行ロックでは排他できないため、
+        tracking_id 単位の advisory lock を取る。提供者・利用者の報告が同時に届いても、
+        後の報告は先の報告が事前登録を引き当てた結果を見て処理する。
+        """
+        self._set_lock_timeout()
+        self.db.execute(
+            text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"),
+            {"key": f"transactions.tracking_id:{tracking_id}"},
+        )
+
+    @wrap_database_error
+    def lock_unlinked_pre_registration(
+        self,
+        provider_id: str,
+        consumer_id: str,
+        data_id: Optional[str],
+        valid_hours: int,
+        payment_service_id: Optional[UUID] = None,
+        snapshot_price: Optional[Decimal] = None,
+        snapshot_tax_rate: Optional[Decimal] = None,
+        snapshot_tax_classification: Optional[str] = None,
+        include_rows_without_payment_user: bool = False,
+    ) -> Optional[Transaction]:
+        """データ交換に紐付いていない事前登録のうち最も古いものを 1 件、行ロックして返す
+
+        事前登録（取引可否確認 API が与信 OK 時に登録した行）は、取引可否確認の X-TrackingId を
+        tracking_id・eligibility_tracking_id として保存され、両当事者とも未報告（pending）のまま残る。
+        状態登録・金額確定の報告で 1 件ずつ引き当てて、tracking_id をデータ取得の X-TrackingId に
+        付け替える（eligibility_tracking_id はそのまま残す）。
+
+        対象: 当事者・データID（利用料モデルなしは data_id IS NULL と決済サービス・金額・税率・税区分）が
+        一致し、両当事者とも pending・未精算・未請求・NP 取引登録済みで、作成から valid_hours 時間以内のもの
+        （それより古いものは CronJob が NP 取引をキャンセルする対象のため引き当てない）。
+        他のリクエストや CronJob がロック中の行は待たずに飛ばす（SKIP LOCKED）。
+        include_rows_without_payment_user が True のときは、決済サービスのユーザー登録が無い行
+        （1.0.0 の取引可否確認（利用料モデルなし）で事前登録した行）も対象にする。
+        """
+        query = self.db.query(Transaction).filter(
+            Transaction.provider_id == provider_id,
+            Transaction.consumer_id == consumer_id,
+            Transaction.consumer_exchange_status == "pending",
+            Transaction.provider_exchange_status == "pending",
+            Transaction.settlement_status == "unsettled",
+            Transaction.request_date.is_(None),
+            Transaction.external_transaction_id.isnot(None),
+            Transaction.created_at >= func.now() - timedelta(hours=valid_hours),
+        )
+        if data_id is None:
+            query = query.filter(Transaction.data_id.is_(None))
+        else:
+            query = query.filter(Transaction.data_id == data_id)
+        if payment_service_id is not None:
+            query = query.outerjoin(
+                PaymentServiceUserRegistration,
+                Transaction.payment_service_user_id == PaymentServiceUserRegistration.payment_service_user_id,
+            )
+            service_match = PaymentServiceUserRegistration.payment_service_id == payment_service_id
+            if include_rows_without_payment_user:
+                service_match = or_(service_match, Transaction.payment_service_user_id.is_(None))
+            query = query.filter(service_match)
+        if snapshot_price is not None:
+            query = query.filter(Transaction.snapshot_price == snapshot_price)
+        if snapshot_tax_rate is not None:
+            query = query.filter(Transaction.snapshot_tax_rate == snapshot_tax_rate)
+        if snapshot_tax_classification is not None:
+            query = query.filter(Transaction.snapshot_tax_classification == snapshot_tax_classification)
+
+        transaction = (
+            query.order_by(Transaction.created_at, Transaction.transaction_id)
+            .limit(1)
+            .with_for_update(skip_locked=True, of=Transaction)
+            .first()
+        )
+        logger.debug(
+            "Unlinked pre-registration lookup",
+            provider_id=provider_id,
+            consumer_id=consumer_id,
+            data_id=data_id,
+            found=transaction is not None,
+        )
+        return transaction
+
+    def _set_lock_timeout(self) -> None:
+        """ロック待ちの上限を設ける（このトランザクションの間だけ有効）"""
+        self.db.execute(
+            text("SELECT set_config('lock_timeout', :timeout, true)"),
+            {"timeout": f"{settings.DB_LOCK_TIMEOUT}s"},
+        )
 
     @wrap_database_error
     def get_all_by_tracking_id_and_identifiers(
@@ -572,8 +777,7 @@ class TransactionRepository:
             self.db.query(Transaction)
             .filter(
                 Transaction.provider_id == provider_id,
-                Transaction.created_at >= datetime.combine(start_date, datetime.min.time()),
-                Transaction.created_at <= datetime.combine(end_date, datetime.max.time())
+                *_completed_in_period(start_date, end_date)
             )
         )
 
@@ -618,8 +822,7 @@ class TransactionRepository:
             self.db.query(Transaction)
             .filter(
                 Transaction.consumer_id == consumer_id,
-                Transaction.created_at >= datetime.combine(start_date, datetime.min.time()),
-                Transaction.created_at <= datetime.combine(end_date, datetime.max.time())
+                *_completed_in_period(start_date, end_date)
             )
         )
 
@@ -651,9 +854,15 @@ class TransactionRepository:
         end_date: date,
         consumer_exchange_status: Optional[str] = None,
         provider_exchange_status: Optional[str] = None,
-        l2_http_status: Optional[str] = None
+        l2_succeeded_only: bool = False,
+        exclude_settlement_statuses: Optional[List[str]] = None,
     ) -> List[Transaction]:
-        """コンシューマーIDとプロバイダーIDと期間で取引一覧を取得"""
+        """コンシューマーIDとプロバイダーIDと期間で取引一覧を取得
+
+        Args:
+            l2_succeeded_only: True の場合、L2 ログ突合で成功（2xx）が確認できた取引のみ
+            exclude_settlement_statuses: 除外する settlement_status（例: ['cancelled']）
+        """
         logger.debug(
             "Listing transactions by consumer and provider",
             consumer_id=consumer_id,
@@ -667,8 +876,7 @@ class TransactionRepository:
             .filter(
                 Transaction.consumer_id == consumer_id,
                 Transaction.provider_id == provider_id,
-                Transaction.created_at >= datetime.combine(start_date, datetime.min.time()),
-                Transaction.created_at <= datetime.combine(end_date, datetime.max.time())
+                *_completed_in_period(start_date, end_date)
             )
         )
 
@@ -676,8 +884,10 @@ class TransactionRepository:
             query = query.filter(Transaction.consumer_exchange_status == consumer_exchange_status)
         if provider_exchange_status:
             query = query.filter(Transaction.provider_exchange_status == provider_exchange_status)
-        if l2_http_status:
-            query = query.filter(Transaction.l2_http_status == l2_http_status)
+        if l2_succeeded_only:
+            query = query.filter(Transaction.l2_succeeded())
+        if exclude_settlement_statuses:
+            query = query.filter(Transaction.settlement_status.notin_(exclude_settlement_statuses))
 
         transactions = query.all()
 
@@ -716,8 +926,7 @@ class TransactionRepository:
             .filter(
                 Transaction.consumer_id == consumer_id,
                 Transaction.provider_id == provider_id,
-                Transaction.created_at >= datetime.combine(start_date, datetime.min.time()),
-                Transaction.created_at <= datetime.combine(end_date, datetime.max.time()),
+                *_completed_in_period(start_date, end_date),
                 Transaction.settlement_status == settlement_status,
             )
             .all()
@@ -765,51 +974,6 @@ class TransactionRepository:
             count=len(transactions)
         )
         
-        return transactions
-
-    @wrap_database_error
-    def get_by_identifiers_without_tracking_id(
-        self,
-        provider_id: str,
-        consumer_id: str,
-        data_id_list: List[Optional[str]],
-    ) -> List[Transaction]:
-        """provider_id + consumer_id + data_id + tracking_id IS NULL で
-        事前登録されたTransactionレコードを検索する。
-
-        Args:
-            provider_id: データ提供者ID
-            consumer_id: データ利用者ID
-            data_id_list: データIDリスト（NULLの場合はdata_id IS NULLで検索）
-        """
-        logger.debug(
-            "Searching pre-registered transactions (tracking_id=NULL)",
-            provider_id=provider_id,
-            consumer_id=consumer_id,
-            data_id_list=data_id_list,
-        )
-
-        query = (
-            self.db.query(Transaction)
-            .filter(
-                Transaction.provider_id == provider_id,
-                Transaction.consumer_id == consumer_id,
-                Transaction.tracking_id.is_(None),
-            )
-        )
-
-        if data_id_list and data_id_list[0] is not None:
-            query = query.filter(Transaction.data_id.in_(data_id_list))
-        else:
-            query = query.filter(Transaction.data_id.is_(None))
-
-        transactions = query.all()
-
-        logger.debug(
-            "Pre-registered transactions found",
-            count=len(transactions),
-        )
-
         return transactions
 
 

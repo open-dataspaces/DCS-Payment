@@ -28,7 +28,7 @@ async def health_check():
 
 
 @router.get("/readiness", include_in_schema=False)
-async def readiness_check(db: Session = Depends(get_db)):
+def readiness_check(db: Session = Depends(get_db)):
     """
     Readiness Probe endpoint.
 
